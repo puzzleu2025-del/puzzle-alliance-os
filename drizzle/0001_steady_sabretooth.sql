@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `one_active_admin` ON `members` (`role`) WHERE "members"."role" = 'admin' AND "members"."status" = 'active';

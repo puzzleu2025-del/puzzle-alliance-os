@@ -1,0 +1,20 @@
+import { build } from "vite";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+await build({ configFile: resolve(root, "vite.pages.config.ts") });
+const output = resolve(root, "pages-dist");
+let html = await readFile(resolve(output, "index.html"), "utf8");
+const script = html.match(/<script\b[^>]*src="\.\/([^"]+)"[^>]*><\/script>/);
+const stylesheet = html.match(/<link\b[^>]*href="\.\/([^"]+\.css)"[^>]*>/);
+if (!script || !stylesheet) throw new Error("Missing preview build assets");
+const javascript = (await readFile(resolve(output, script[1]), "utf8")).replace(/<\/script/gi, "<\\/script");
+const css = await readFile(resolve(output, stylesheet[1]), "utf8");
+html = html.replace(script[0], () => '<script type="module">' + javascript + '</script>');
+html = html.replace(stylesheet[0], () => '<style>' + css + '</style>');
+await mkdir(resolve(root,"deliverables"), {recursive:true});
+await writeFile(resolve(root,"deliverables/puzzle-alliance-preview.html"),html);
+await writeFile(resolve(output,".nojekyll"),"");
+console.log("Pages build: pages-dist; standalone preview: deliverables/puzzle-alliance-preview.html");

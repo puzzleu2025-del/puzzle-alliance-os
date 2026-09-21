@@ -1,6 +1,12 @@
-# vinext-starter
+# Puzzle Alliance OS
 
-A clean full-stack starter running on [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and Drizzle support.
+跨裝置的活動、任務、會議、行事曆與甘特圖協作平台。完整本機版使用 Vinext、Cloudflare D1 與 Drizzle；GitHub Pages 發布的是可供跨裝置檢視與操作的靜態預覽版。
+
+## GitHub Pages
+
+推送到 `master` 後，`.github/workflows/pages-preview.yml` 會建立並發布靜態預覽。儲存庫第一次啟用時，請在 GitHub 的 **Settings → Pages → Build and deployment** 選擇 **GitHub Actions**。
+
+GitHub Pages 無法執行伺服器端 API 或 D1，因此正式的登入、密碼與跨裝置資料同步必須部署 Worker 後端。靜態預覽只展示產品介面與瀏覽器內的操作狀態，不會偽造一組可登入的系統管理員密碼。
 
 ## Prerequisites
 
@@ -28,7 +34,7 @@ On portable, `npm run dev` uses `vinext dev` with HMR, starting at port 5173. Vi
 
 For browser QA on managed Linux, use `sites-preview start`. The project's dev script runs Vite and accepts the supervisor's `--host 0.0.0.0 --port 4173 --strictPort` arguments. The internal browser uses `http://terminal.local:4173/`; it is not a user-facing URL. The supervisor owns the preview lifecycle. The ignored local profile survives the supervisor's cleared process environment.
 
-The portable profile simulates ChatGPT sign-in only for loopback development requests. Visit `/signin-with-chatgpt?return_to=/` to sign in as `local_seedy` (`seedy@sites.test`, display name `Seedy`) and `/signout-with-chatgpt?return_to=/` to sign out. The development cookie preserves that identity across server restarts. Mock auth is disabled in the managed-linux profile and is not included in production builds; hosted authentication remains dispatch-owned.
+The portable profile supplies a loopback-only development identity for local requests. Visit `/signin-with-chatgpt?return_to=/` to start the local session and `/signout-with-chatgpt?return_to=/` to sign out. The identity is labeled `嘉駿` in the interface and uses a non-routable local address internally. Mock auth is disabled in the managed-linux profile and is not included in production builds; hosted authentication remains dispatch-owned.
 
 The Worker uses `vinext/server/fetch-handler`, including Vinext's config-aware image handling. After building, `npm start` runs that Worker locally through Wrangler on `127.0.0.1`, sharing `.wrangler/state` with dev preview and local D1 migrations; it does not deploy the site or simulate sign-in. Use the URL printed by the server. Pass `npm start -- --port <port>` to select a different built-preview port.
 

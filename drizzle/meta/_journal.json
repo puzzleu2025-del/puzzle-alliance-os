@@ -15,6 +15,13 @@
       "when": 1789892468171,
       "tag": "0001_steady_sabretooth",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789930992638,
+      "tag": "0002_exotic_kat_farrell",
+      "breakpoints": true
     }
   ]
 }

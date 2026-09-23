@@ -1,12 +1,14 @@
 # Puzzle Alliance OS
 
-跨裝置的活動、任務、會議、行事曆與甘特圖協作平台。完整本機版使用 Vinext、Cloudflare D1 與 Drizzle；GitHub Pages 發布的是可供跨裝置檢視與操作的靜態預覽版。
+跨裝置的活動、任務、會議、行事曆與甘特圖協作平台。共用版使用 Vinext、Cloudflare D1 與 Drizzle；GitHub 儲存庫保存原始碼，GitHub Pages 將訪客導向共用版。
 
 ## GitHub Pages
 
-推送到 `master` 後，`.github/workflows/pages-preview.yml` 會建立並發布靜態預覽。儲存庫第一次啟用時，請在 GitHub 的 **Settings → Pages → Build and deployment** 選擇 **GitHub Actions**。
+推送到 `master` 後，`.github/workflows/pages-preview.yml` 會建立並發布入口頁。儲存庫第一次啟用時，請在 GitHub 的 **Settings → Pages → Build and deployment** 選擇 **GitHub Actions**。
 
-GitHub Pages 無法執行伺服器端 API 或 D1。線上互動版因此提供瀏覽器內的登入、註冊、核可與成員管理，資料只保存在目前瀏覽器；安全的正式登入與跨裝置共用資料仍需部署 Worker 後端。
+GitHub Pages 無法執行伺服器端 API 或 D1。真正會儲存與同步的服務位於 [共用工作空間](https://puzzle-alliance-os.gaoj3152.chatgpt.site/)；Pages 入口會將沒有舊資料的訪客導向該站。若目前瀏覽器保有舊版資料，入口先提供 JSON 備份與舊版檢視；舊資料不會自動移入共用資料庫。
+
+共用版首次啟用由站點擁有者在 `/setup` 設定管理員密碼；資料庫 migration 不包含固定初始密碼。管理員可核可新成員，已核可成員可儲存共用工作空間資料。報名個資由獨立 API 管理，僅管理員及總召可檢視。
 
 ## 活動報名中心
 
@@ -14,7 +16,7 @@ GitHub Pages 無法執行伺服器端 API 或 D1。線上互動版因此提供�
 - 公開連結只提供表單與送出功能，不公開其他人的填答；管理名單、顯示個資、對帳註記及 Excel 匯出需管理員權限。
 - 對帳可標示未對帳、待確認、已對帳、已退款或無需付款，並保存備註；Excel 會一併輸出對帳與提醒欄位。
 - 系統依活動日期計算前 5 天與前 1 天的提醒日期，並可產生每位參加者的郵件內容。真正的自動寄信仍需正式 Worker、排程觸發器與郵件供應商密鑰；GitHub Pages 預覽不會在背景寄信。
-- GitHub Pages 預覽會把報名表、測試填答與對帳狀態保存在同一台裝置的瀏覽器中，方便跨分頁驗收；它不會跨裝置同步。正式版則使用 D1 的 `registration_forms` 與 `registration_submissions` 資料表。
+- 舊版 Pages 預覽只把報名表、測試填答與對帳狀態保存在原瀏覽器；共用版使用 D1 的 `registration_forms` 與 `registration_submissions` 資料表，需使用新版 `/r/{slug}` 報名連結。
 
 ## Prerequisites
 

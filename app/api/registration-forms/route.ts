@@ -9,7 +9,7 @@ async function authorize() {
   if (!env.DB) return { error: Response.json({ error: "資料庫尚未連線" }, { status: 503, headers: noStore }) };
   const user = await getMember();
   if (!user) return { error: Response.json({ error: "請先登入已核可帳號" }, { status: 401, headers: noStore }) };
-  if (!["admin", "coordinator"].includes(user.role)) return { error: Response.json({ error: "只有總召以上權限可管理報名個資" }, { status: 403, headers: noStore }) };
+  if (!["admin", "manager", "coordinator"].includes(user.role)) return { error: Response.json({ error: "只有總召以上權限可管理報名個資" }, { status: 403, headers: noStore }) };
   return { user };
 }
 

@@ -1,0 +1,158 @@
+{
+  "REQUESTED_CHANGE": "完成使用者已要求但尚未上線的一般管理員成員管理、逐級核可、視窗保留輸入、活動倒推任務日期、個人/全局行事曆與改期確認；驗收後發布至 GitHub 與 Sites，保留現有人物與不相關部分。",
+  "ALLOWED_SCOPE": {
+    "app/management-panels.tsx": "建立活動／任務／會議視窗保留輸入、任務活動倒推日期與角色說明",
+    "app/members-panel.tsx": "恢復一般管理員、依階層顯示核可及管理操作，並防止視窗意外關閉",
+    "app/api/members/route.ts": "後端逐級權限檢查，防止越權核可、升等及修改成員",
+    "app/workspace.tsx": "角色導航、行事曆登入身分、改期儲存與行動版視窗行為",
+    "app/calendar-panel.tsx": "個人任務視圖、總召以上切換、活動倒推新增任務及每次行事曆變更前確認",
+    "app/api/workspace/route.ts": "對行事曆改期執行後端所有權與變更範圍驗證",
+    "app/api/registration-forms/route.ts": "恢復一般管理員作為總召以上的報名表權限",
+    ".argo/contracts/puzzle-manager-calendar-20260924.json": "本次 exact-file 變更合約與驗收條件",
+    "scripts/argo/regression.mjs": "更新一般管理員角色階層的隔離回歸測試，僅允許成員管理預期畫面差異",
+    "tests/feature/manager-roles.mjs": "隔離 D1 深入驗證一般管理員、總召、組長與成員的 UI/API 核可階層",
+    "tests/feature/calendar-scheduling.mjs": "隔離 D1 深入驗證行事曆、活動倒推日期、改期確認與建立視窗"
+  },
+  "PROTECTED_SCOPE": [
+    "app/**",
+    "components/**",
+    "preview/**",
+    "hooks/**",
+    "lib/**",
+    "db/**",
+    "drizzle/**",
+    "*.css",
+    "**/*.css",
+    ".github/**",
+    ".openai/**",
+    "build/**",
+    "package*.json",
+    "*config*",
+    "cloudflare-env.d.ts",
+    ".env*",
+    "AGENTS.md",
+    ".argo/policy.json",
+    "scripts/**",
+    ".codex/**",
+    ".githooks/**"
+  ],
+  "EXPECTED_SIDE_EFFECTS": [
+    "既有成員、活動、任務及正式 D1 資料不自動改寫；無 migration",
+    "行事曆活動改期確認文案明示關聯任務同步；只有仍符合原階段排程的任務日期才重新計算",
+    "一般成員行事曆預設顯示自己的任務；總召以上可查看個人或全局",
+    "成員管理新增一般管理員選項；管理員以下依角色層級選擇、核可與閱讀成員名單。"
+  ],
+  "acceptance": [
+    "游標移出或點背景不關閉含未存內容的建立視窗",
+    "後端嚴守系統管理員可核可一般管理員以下、一般管理員最高核可總召、總召只核可組長與一般成員；組長及成員不可核可",
+    "新任務依所屬活動日期及階段倒推、可手動微調，行事曆快速建立同理",
+    "行事曆個人/全局檢視符合角色，拖拉與表單改期在確認前不寫入",
+    "完整差異與隔離測試確認人物資料未被更新或刪除",
+    "隔離 D1 中管理員可建立或晉升一般管理員；一般管理員最高核可總召；總召只可核可組長或成員；低階或同階 API 拒絕越權。",
+    "同環境登入、導覽、響應式與相鄰頁回歸；非預期變更的 screenshot/text 精確比對。"
+  ],
+  "executor": "root",
+  "reviewer": "manager-independent-reviewer",
+  "protected_exceptions": {
+    "app/management-panels.tsx": {
+      "user_authorization": "使用者本次第 2、3、4 點明確要求"
+    },
+    "app/members-panel.tsx": {
+      "user_authorization": "使用者本次第 2、3 點明確要求"
+    },
+    "app/api/members/route.ts": {
+      "user_authorization": "使用者本次第 3 點明確要求，必須在後端核可權限"
+    },
+    "app/workspace.tsx": {
+      "user_authorization": "使用者本次第 2、3、4、5 點明確要求"
+    },
+    "app/calendar-panel.tsx": {
+      "user_authorization": "使用者本次第 4、5 點明確要求"
+    },
+    "app/api/workspace/route.ts": {
+      "user_authorization": "使用者本次第 5 點明確要求行事曆修改控制"
+    },
+    "app/api/registration-forms/route.ts": {
+      "user_authorization": "使用者本次第 3 點要求恢復一般管理員，既有總召以上功能須包含之"
+    },
+    "scripts/argo/regression.mjs": {
+      "user_authorization": "使用者明確要求恢復一般管理員及逐級核可；舊測試斷言會錯誤否定新權限，需同步修改測試"
+    }
+  },
+  "checks": {
+    "governance": {
+      "argv": [
+        "C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/argo",
+        "-p",
+        "test_govern.py",
+        "-v"
+      ],
+      "timeout": 180
+    },
+    "typecheck": {
+      "argv": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "timeout": 180
+    },
+    "lint": {
+      "argv": [
+        "node",
+        "node_modules/eslint/bin/eslint.js",
+        "app/management-panels.tsx",
+        "app/members-panel.tsx",
+        "app/api/members/route.ts",
+        "app/workspace.tsx",
+        "app/calendar-panel.tsx",
+        "app/api/workspace/route.ts",
+        "app/api/registration-forms/route.ts",
+        "scripts/argo/regression.mjs"
+      ],
+      "timeout": 180
+    },
+    "build": {
+      "argv": [
+        "node",
+        "scripts/run-framework.mjs",
+        "build"
+      ],
+      "timeout": 600
+    },
+    "application_regression": {
+      "argv": [
+        "node",
+        "scripts/argo/regression.mjs",
+        "--repo=.",
+        "--out=.argo/runtime/puzzle-manager-calendar-20260924-after",
+        "--compare=.argo/runtime/puzzle-manager-calendar-20260924-before",
+        "--allow-changed=admin-members-desktop,admin-members-mobile"
+      ],
+      "timeout": 300
+    },
+    "role_regression": {
+      "argv": [
+        "node",
+        "tests/feature/manager-roles.mjs",
+        "--repo=.",
+        "--out=work/manager-role-argo"
+      ],
+      "timeout": 300
+    },
+    "calendar_regression": {
+      "argv": [
+        "node",
+        "tests/feature/calendar-scheduling.mjs",
+        "--repo=.",
+        "--out=work/calendar-argo"
+      ],
+      "timeout": 300
+    }
+  }
+}

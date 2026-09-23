@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import type {
+import { phaseSchedule, type
   Activity,
   ManagementPanelProps,
   Meeting,
@@ -14,8 +14,11 @@ type EntryKind = "activity" | "task" | "meeting";
 type Composer = EntryKind | null;
 export type CalendarEntry = { id: string; kind: EntryKind; title: string; date: string; time?: string };
 type CalendarPanelProps = ManagementPanelProps & {
+  userRole?: string;
   onReschedule?: (entry: CalendarEntry, date: string, time?: string) => Promise<boolean>;
 };
+
+const phaseChoices = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"];
 
 const kindLabels: Record<EntryKind, string> = {
   activity: "活動",
@@ -126,9 +129,24 @@ function TaskForm({
   disabled: boolean;
   onSubmit: (form: HTMLFormElement) => void;
 }) {
+  const applyActivitySchedule = (form: HTMLFormElement) => {
+    const values = new FormData(form);
+    const activity = data.activities.find((row) => row.id === field(values, "activityId"));
+    const schedule = phaseSchedule(activity?.date ?? "", field(values, "phaseId"));
+    if (!schedule) return;
+    (form.elements.namedItem("startDate") as HTMLInputElement).value = schedule.startDate;
+    (form.elements.namedItem("due") as HTMLInputElement).value = schedule.due;
+  };
   return (
     <form className="calendar-quick-form" onSubmit={(event) => {
       event.preventDefault();
+      const values = new FormData(event.currentTarget);
+      const phaseInput = event.currentTarget.elements.namedItem("phaseId") as unknown as HTMLSelectElement;
+      if (field(values, "activityId") && !field(values, "phaseId")) {
+        phaseInput.setCustomValidity("請先選擇活動籌備階段");
+        phaseInput.reportValidity();
+        return;
+      }
       if (validateOrder(event.currentTarget, "startDate", "due", "期限不能早於開始日期")) {
         onSubmit(event.currentTarget);
       }
@@ -139,7 +157,8 @@ function TaskForm({
         <label>期限<input name="due" type="date" required defaultValue={date} /></label>
         <label>任務主責<input name="assignee" required maxLength={100} defaultValue={userName} /></label>
         <label>優先級<select name="priority" defaultValue="一般"><option>緊急</option><option>高</option><option>一般</option><option>低</option></select></label>
-        <label className="calendar-field-wide">所屬活動<select name="activityId" defaultValue={data.activities[0]?.id ?? ""}><option value="">未分類</option>{data.activities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
+        <label className="calendar-field-wide">所屬活動<select name="activityId" defaultValue="" onChange={(event) => applyActivitySchedule(event.currentTarget.form!)}><option value="">未分類</option>{data.activities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
+        <label className="calendar-field-wide">籌備階段<select name="phaseId" defaultValue="" onChange={(event) => { event.currentTarget.setCustomValidity(""); applyActivitySchedule(event.currentTarget.form!); }}><option value="">請選擇階段</option>{phaseChoices.map((phase) => <option key={phase} value={phase}>{phase}</option>)}</select><small>選擇活動與階段後，依活動日倒推日期；仍可手動調整。</small></label>
       </fieldset>
       <button className="primary calendar-save" type="submit" disabled={disabled}>{disabled ? "儲存中…" : "建立任務"}</button>
     </form>
@@ -179,7 +198,7 @@ function MeetingForm({
   );
 }
 
-export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: CalendarPanelProps) {
+export function CalendarPanel({ data, userName, userRole, busy, onSave, onReschedule }: CalendarPanelProps) {
   const now = new Date();
   const today = keyOf(now);
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
@@ -191,7 +210,15 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
   const [moving, setMoving] = useState<CalendarEntry | null>(null);
   const [dragging, setDragging] = useState<CalendarEntry | null>(null);
   const [dragOverDate, setDragOverDate] = useState("");
+  const [taskView, setTaskView] = useState("self");
   const draggedEntry = useRef<CalendarEntry | null>(null);
+  const canSeeAllTasks = ["admin", "manager", "coordinator"].includes(userRole ?? "");
+  const taskOwners = useMemo(() => Array.from(new Set(data.tasks.map((task) => task.assignee.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-TW")), [data.tasks]);
+  const visibleTasks = data.tasks.filter((task) => {
+    if (canSeeAllTasks && taskView === "all") return true;
+    return task.assignee.trim() === (canSeeAllTasks && taskView !== "self" ? taskView : userName.trim());
+  });
+  const canMoveEntry = (entry: CalendarEntry) => Boolean(onReschedule) && (canSeeAllTasks || entry.kind === "task");
 
   const cells = useMemo(() => {
     const year = cursor.getFullYear();
@@ -206,7 +233,7 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
 
   const entriesFor = (date: string) => ({
     activities: data.activities.filter((activity) => activityOccursOn(activity, date)),
-    tasks: data.tasks.filter((task) => datePart(task.due || task.startDate) === date),
+    tasks: visibleTasks.filter((task) => datePart(task.due || task.startDate) === date),
     meetings: data.meetings.filter((meeting) => datePart(meeting.time) === date),
   });
   const selected = entriesFor(selectedDate);
@@ -259,6 +286,7 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
         blocker: "",
         startDate: field(form, "startDate"),
         priority: field(form, "priority") || "一般",
+        phaseId: field(form, "phaseId") || undefined,
         flow: ["建立任務", assignee, "完成"],
         step: 1,
       };
@@ -286,6 +314,7 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
       next = { ...data, meetings: [...data.meetings, item] };
       action = "create_meeting";
     }
+    if (!window.confirm(`確認建立${kindLabels[kind]}「${kind === "meeting" ? field(form, "title") : field(form, "name")}」？`)) return;
     setSubmitting(true);
     setFailed(false);
     setFeedback("");
@@ -305,7 +334,14 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
   };
 
   const reschedule = async (entry: CalendarEntry, target: string, time?: string) => {
-    if (!onReschedule || saving || !/^\d{4}-\d{2}-\d{2}$/.test(target)) return;
+    if (!onReschedule || !canMoveEntry(entry) || saving || !/^\d{4}-\d{2}-\d{2}$/.test(target)) return;
+    if (target === entry.date && (!time || time === entry.time)) return;
+    if (!window.confirm(`確認將${kindLabels[entry.kind]}「${entry.title}」從 ${entry.date} 改到 ${target}${time ? ` ${time}` : ""}？${entry.kind === "activity" ? " 符合原自動排程的關聯任務將跟著調整；手動修改過的日期會保留。" : ""}`)) {
+      setDragging(null);
+      setDragOverDate("");
+      draggedEntry.current = null;
+      return;
+    }
     setSubmitting(true);
     setFailed(false);
     setFeedback("");
@@ -348,6 +384,7 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
         </div>
         <button className="primary" type="button" onClick={() => { chooseDate(today); setComposer("activity"); }}>＋ 今天新增</button>
       </div>
+      {canSeeAllTasks && <label className="calendar-task-view">任務視角 <select value={taskView} onChange={(event) => setTaskView(event.target.value)}><option value="self">我的任務</option><option value="all">全部任務</option>{taskOwners.filter((owner) => owner !== userName.trim()).map((owner) => <option value={owner} key={owner}>{owner}的任務</option>)}</select></label>}
 
       <div className="calendar-layout">
         <section className="calendar-month-card" aria-label={`${year} 年 ${month + 1} 月`}>
@@ -408,14 +445,14 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
                         type="button"
                         className={`calendar-drag-item is-${entry.kind}${dragging?.kind === entry.kind && dragging.id === entry.id ? " is-dragging" : ""}`}
                         key={`${entry.kind}-${entry.id}`}
-                        draggable={Boolean(onReschedule) && !saving}
+                        draggable={canMoveEntry(entry) && !saving}
                         title={`${kindLabels[entry.kind]}：${entry.title}。可拖曳改期，或點擊開啟日期調整。`}
                         onClick={() => {
                           setSelectedDate(cell.date);
                           setComposer(null);
                           setFailed(false);
                           setFeedback("");
-                          setMoving(entry);
+                          setMoving(canMoveEntry(entry) ? entry : null);
                         }}
                         onDragStart={(event) => {
                           draggedEntry.current = entry;
@@ -474,9 +511,9 @@ export function CalendarPanel({ data, userName, busy, onSave, onReschedule }: Ca
           </div>}
 
           <div className="calendar-day-entries">
-            {selected.activities.map((activity) => <article className="calendar-entry is-activity" key={`activity-${activity.id}`}><span>活動</span><div><strong>{activity.name}</strong><small>總召 {activity.owner || "未指派"} · {activity.status}</small></div>{onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: activity.id, kind: "activity", title: activity.name, date: datePart(activity.startDate || activity.date) }); }}>改期</button>}</article>)}
+            {selected.activities.map((activity) => <article className="calendar-entry is-activity" key={`activity-${activity.id}`}><span>活動</span><div><strong>{activity.name}</strong><small>總召 {activity.owner || "未指派"} · {activity.status}</small></div>{canSeeAllTasks && onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: activity.id, kind: "activity", title: activity.name, date: datePart(activity.startDate || activity.date) }); }}>改期</button>}</article>)}
             {selected.tasks.map((task) => <article className="calendar-entry is-task" key={`task-${task.id}`}><span>任務</span><div><strong>{task.name}</strong><small>{activityName(data, task.activityId)} · 主責 {task.assignee || "未指派"}</small></div>{onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: task.id, kind: "task", title: task.name, date: datePart(task.due) }); }}>改期</button>}</article>)}
-            {selected.meetings.map((meeting) => <article className="calendar-entry is-meeting" key={`meeting-${meeting.id}`}><span>會議</span><div><strong>{meeting.title}</strong><small>{timeLabel(meeting.time)} · 主持 {meeting.organizer || "未指派"}</small></div>{onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: meeting.id, kind: "meeting", title: meeting.title, date: datePart(meeting.time), time: meeting.time.slice(11, 16) }); }}>改期</button>}</article>)}
+            {selected.meetings.map((meeting) => <article className="calendar-entry is-meeting" key={`meeting-${meeting.id}`}><span>會議</span><div><strong>{meeting.title}</strong><small>{timeLabel(meeting.time)} · 主持 {meeting.organizer || "未指派"}</small></div>{canSeeAllTasks && onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: meeting.id, kind: "meeting", title: meeting.title, date: datePart(meeting.time), time: meeting.time.slice(11, 16) }); }}>改期</button>}</article>)}
             {!selected.activities.length && !selected.tasks.length && !selected.meetings.length && !composer && <div className="calendar-empty"><strong>這一天還沒有安排</strong><p>可直接新增活動、任務或會議，日期會自動帶入。</p></div>}
           </div>
         </aside>

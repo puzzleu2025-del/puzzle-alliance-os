@@ -45,7 +45,7 @@ try {
   const admin=await context(),member=await context(),coordinator=await context(),anon=await context();
   const authTransitions=new WeakMap();
   const api=async(c,url,method='GET',data)=>c.request.fetch(base+url,{method,data,headers:{Origin:base}});
-  const status=async(name,c,url,expected,method,data)=>{const r=await api(c,url,method,data);check(name,r.status()===expected,`HTTP ${r.status()}, expected ${expected}${r.status()===expected?'':'; '+(await r.text()).slice(0,300)}`);return r;};
+  const status=async(name,c,url,expected,method,data)=>{const r=await api(c,url,method,data);check(name,r.status()===expected,`HTTP ${r.status()}, expected ${expected}: ${r.status()===expected?'':await r.text()}`);return r;};
   await status('Anonymous workspace denied',anon,'/api/workspace',401);
   await status('Anonymous member list denied',anon,'/api/members',403);
   const page=await admin.newPage();
@@ -62,26 +62,58 @@ try {
   await login(page,'kao19950411');check('Admin UI login',true);
   await status('Admin member list allowed',admin,'/api/members',200);
   await status('Create isolated member',admin,'/api/members',201,'POST',{username:'regression.member',displayName:'Regression Member',role:'member',password:'Regression-Local-Only-2026'});
-  await status('Create isolated coordinator',admin,'/api/members',201,'POST',{username:'regression.coordinator',displayName:'Regression Coordinator',role:'coordinator',password:'Regression-Local-Only-2026'});
+  const createdCoordinator=await status('Create isolated coordinator',admin,'/api/members',201,'POST',{username:'regression.coordinator',displayName:'Regression Coordinator',role:'coordinator',password:'Regression-Local-Only-2026'});
   await status('Coordinator API login',coordinator,'/api/auth/login',200,'POST',{username:'regression.coordinator',password:'Regression-Local-Only-2026'});
   await status('Coordinator registration private API allowed',coordinator,'/api/registration-forms?activityId=regression-activity',200);
-  await status('Coordinator lower-role member list allowed',coordinator,'/api/members',200);
+  await status('Coordinator member management allowed',coordinator,'/api/members',200);
+  wrangler(['d1','execute','DB','--local','--persist-to',state,'--command',"UPDATE members SET created_at='2026-09-23T12:00:00.000Z';"]);
   const initial=await (await api(admin,'/api/workspace')).json();
   await status('Save isolated activity',admin,'/api/workspace',200,'PUT',{state:{activities:[{id:'regression-activity',name:'Regression Activity',date:'2026-10-01',owner:'QA',status:'規劃中',description:'Isolated fixture'}],tasks:[],meetings:[],notices:[]},version:initial.version,action:'create_activity'});
+  const scheduled=(await (await api(admin,'/api/workspace')).json());
+  const tasks=[
+    {id:'admin-calendar-task',name:'Admin Calendar Task',activityId:'regression-activity',assignee:'嘉駿',due:'2026-09-23',startDate:'2026-09-20',status:'待處理',blocker:'',phaseId:'P7'},
+    {id:'member-calendar-task',name:'Member Calendar Task',activityId:'regression-activity',assignee:'Regression Member',due:'2026-09-23',startDate:'2026-09-20',status:'待處理',blocker:'',phaseId:'P7'},
+    {id:'aligned-calendar-task',name:'Aligned Calendar Task',activityId:'regression-activity',assignee:'嘉駿',due:'2026-10-01',startDate:'2026-09-17',status:'待處理',blocker:'',phaseId:'P7'},
+  ];
+  await status('Save isolated task fixtures',admin,'/api/workspace',200,'PUT',{state:{...scheduled.state,tasks},version:scheduled.version,action:'create_task'});
   await page.reload();await page.locator('.sync').filter({hasText:'已同步'}).waitFor();
   const labels=['營運總覽','活動管理','任務中心','報名表單','行事曆','會議協調','組織與角色','成員管理','通知中心','系統設定'];
   for(const label of labels){await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:label,exact:true}).click();await page.getByRole('heading',{name:label,exact:true,level:1}).waitFor();check('Admin navigation '+label,true);}
+  await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'行事曆',exact:true}).click();
+  check('Calendar defaults to own tasks',await page.getByText('Admin Calendar Task').count()>0&&await page.getByText('Member Calendar Task').count()===0);
+  await page.locator('.calendar-task-view select').selectOption('all');
+  check('Admin can see all tasks',await page.getByText('Member Calendar Task').count()>0);
+  await page.locator('.calendar-task-view select').selectOption('self');
+  await page.getByRole('button',{name:'改期',exact:true}).click();
+  await page.locator('input[name="moveDate"]').fill('2026-09-24');
+  page.once('dialog',dialog=>dialog.dismiss());
+  await page.getByRole('button',{name:'儲存日期'}).click();
+  const afterCancel=(await (await api(admin,'/api/workspace')).json());
+  check('Dismissed calendar confirmation keeps task date',afterCancel.state.tasks.find(row=>row.id==='admin-calendar-task')?.due==='2026-09-23');
+  await page.getByRole('button',{name:'關閉改期表單'}).click();
+  await page.getByRole('button',{name:'＋ 任務'}).click();
+  await page.locator('.calendar-composer select[name="activityId"]').selectOption('regression-activity');
+  await page.locator('.calendar-composer select[name="phaseId"]').selectOption('P7');
+  check('Calendar task dates derive from activity',await page.locator('.calendar-composer input[name="startDate"]').inputValue()==='2026-09-17'&&await page.locator('.calendar-composer input[name="due"]').inputValue()==='2026-10-01');
+  await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'活動管理',exact:true}).click();
+  await page.getByRole('button',{name:'＋ 建立活動'}).click();
+  await page.locator('.mgmt-dialog input[name="name"]').fill('Preserve unfinished activity');
+  await page.locator('.mgmt-dialog').dispatchEvent('click',{clientX:0,clientY:0});
+  check('Accidental backdrop click retains activity form',await page.locator('.mgmt-dialog').isVisible()&&await page.locator('.mgmt-dialog input[name="name"]').inputValue()==='Preserve unfinished activity');
+  await page.getByRole('button',{name:'關閉',exact:true}).click();
   for(const [name,label] of [['dashboard','營運總覽'],['activities','活動管理'],['members','成員管理']]){await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:label,exact:true}).click();await page.waitForTimeout(350);await shot(page,'admin-'+name+'-desktop');}
   await page.setViewportSize({width:390,height:844});
   for(const [name,label] of [['dashboard','總覽'],['activities','活動']]){await page.getByRole('navigation',{name:'手機導覽',exact:true}).getByRole('button',{name:label,exact:true}).click();await shot(page,'admin-'+name+'-mobile');check('Mobile no document overflow '+name,await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
   await page.getByRole('button',{name:'更多功能',exact:true}).click();await page.getByRole('dialog').getByRole('button',{name:'成員管理'}).click();await page.waitForTimeout(350);await shot(page,'admin-members-mobile');
-  await page.getByRole('button',{name:'＋ 新增成員'}).click();
-  const memberDialog=page.getByRole('dialog',{name:'新增成員'});
-  check('Admin UI can choose general manager',await memberDialog.getByRole('option',{name:/一般管理員/}).count()===1);
-  const memberPattern=await memberDialog.locator('input[name="username"]').getAttribute('pattern');
-  check('Create-member username pattern compiles with v flag',await page.evaluate(p=>{try{new RegExp(p,'v');return true;}catch{return false;}},memberPattern));
-  await memberDialog.getByRole('button',{name:'取消'}).click();
   const mp=await member.newPage();observe(mp,'member');await login(mp,'regression.member');check('Member UI login',true);
+  const currentWorkspace=(await (await api(admin,'/api/workspace')).json());
+  const forbidden={...currentWorkspace.state,tasks:currentWorkspace.state.tasks.map(row=>row.id==='admin-calendar-task'?{...row,due:'2026-09-24'}:row),notices:[{id:'blocked-notice',title:'blocked',detail:'blocked',createdAt:'2026-09-23T12:00:00Z',read:false},...currentWorkspace.state.notices]};
+  await status('Member cannot reschedule someone else task',member,'/api/workspace',403,'PUT',{state:forbidden,version:currentWorkspace.version,action:'reschedule'});
+  await status('Member cannot bypass date check with action label',member,'/api/workspace',403,'PUT',{state:forbidden,version:currentWorkspace.version,action:'update_workspace'});
+  const stolen={...currentWorkspace.state,tasks:currentWorkspace.state.tasks.map(row=>row.id==='admin-calendar-task'?{...row,assignee:'Regression Member'}:row)};
+  await status('Member cannot reassign someone else task',member,'/api/workspace',403,'PUT',{state:stolen,version:currentWorkspace.version,action:'update_workspace'});
+  await mp.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'行事曆',exact:true}).click();
+  check('Member calendar hides others tasks',await mp.getByText('Member Calendar Task').count()>0&&await mp.getByText('Admin Calendar Task').count()===0);
   await status('Member workspace allowed',member,'/api/workspace',200);
   await status('Member registration private API denied',member,'/api/registration-forms?activityId=regression-activity',403);
   await status('Member list denied',member,'/api/members',403);
@@ -89,8 +121,25 @@ try {
   check('Member admin navigation hidden',await mp.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'成員管理',exact:true}).count()===0);
   await shot(mp,'member-dashboard-desktop');
   await mp.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'系統設定',exact:true}).click();authTransitions.set(mp,'logout');await mp.getByRole('button',{name:'登出此裝置'}).click();await mp.locator('#login-username').waitFor();authTransitions.delete(mp);check('Member UI logout',true);await status('Logged out session denied',member,'/api/workspace',401);
-  await page.setViewportSize({width:1440,height:1000});await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'系統設定',exact:true}).click();authTransitions.set(page,'logout');await page.getByRole('button',{name:'登出此裝置'}).click();await page.locator('#login-username').waitFor();authTransitions.delete(page);check('Admin UI logout',true);
+  await page.setViewportSize({width:1440,height:1000});await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'行事曆',exact:true}).click();
+  await page.getByRole('button',{name:'改期',exact:true}).click();
+  await page.locator('input[name="moveDate"]').fill('2026-09-24');
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'儲存日期'}).click();
+  await page.getByText('「Admin Calendar Task」已移到 2026-09-24').waitFor();
+  const afterMove=(await (await api(admin,'/api/workspace')).json());
+  check('Confirmed calendar task reschedule persists',afterMove.state.tasks.find(row=>row.id==='admin-calendar-task')?.due==='2026-09-24');
+  await page.getByRole('button',{name:'下一個月'}).click();
+  await page.locator('.calendar-day[aria-label^="2026-10-01"] .calendar-day-select').click();
+  await page.getByRole('button',{name:'改期',exact:true}).first().click();
+  await page.locator('input[name="moveDate"]').fill('2026-10-08');
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'儲存日期'}).click();
+  await page.getByText('「Regression Activity」已移到 2026-10-08').waitFor();
+  const afterActivityMove=(await (await api(admin,'/api/workspace')).json());
+  check('Activity move shifts phase-aligned task only',afterActivityMove.state.activities.find(row=>row.id==='regression-activity')?.date==='2026-10-08'&&afterActivityMove.state.tasks.find(row=>row.id==='aligned-calendar-task')?.due==='2026-10-08'&&afterActivityMove.state.tasks.find(row=>row.id==='admin-calendar-task')?.due==='2026-09-24');
+  await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:'系統設定',exact:true}).click();authTransitions.set(page,'logout');await page.getByRole('button',{name:'登出此裝置'}).click();await page.locator('#login-username').waitFor();authTransitions.delete(page);check('Admin UI logout',true);
   report.checks.push({name:'No browser console or runtime errors',ok:report.browserErrors.length===0,detail:`${report.browserErrors.length} errors`});
   check('No failed browser network responses',report.networkErrors.length===0,`${report.networkErrors.length} errors`);
-  if(args['--compare']){const previous=JSON.parse(await fs.readFile(path.join(path.resolve(args['--compare']),'report.json'),'utf8'));const allowed=new Set((args['--allow-changed']||'').split(',').filter(Boolean));report.comparison=report.screenshots.map(s=>{const before=previous.screenshots.find(x=>x.name===s.name);return {name:s.name,exactImageMatch:before?.sha256===s.sha256,exactTextMatch:before?.text===s.text,expectedChange:allowed.has(s.name)};});check('Before/after unchanged screenshots and text match',report.comparison.every(x=>x.expectedChange||x.exactImageMatch&&x.exactTextMatch),'Only explicit expected changes may differ');check('Expected screenshot changes are limited to actual pages', [...allowed].every(name=>report.comparison.some(x=>x.name===name)));}
+  if(args['--compare']){const previous=JSON.parse(await fs.readFile(path.join(path.resolve(args['--compare']),'report.json'),'utf8'));report.comparison=report.screenshots.map(s=>{const before=previous.screenshots.find(x=>x.name===s.name);return {name:s.name,exactImageMatch:before?.sha256===s.sha256,exactTextMatch:before?.text===s.text};});check('Before/after screenshot and text comparison',report.comparison.every(x=>x.exactImageMatch&&x.exactTextMatch),'Exact comparison; review any intentional change explicitly');}
 }catch(e){report.failure=e.message;process.exitCode=1;}finally{if(browser)await browser.close();if(server){if(process.platform==='win32')spawnSync('taskkill',['/pid',String(server.pid),'/t','/f'],{windowsHide:true,stdio:'ignore'});else server.kill();}report.passed=!report.failure && report.checks.every(x=>x.ok);if(!report.passed)process.exitCode=1;await fs.writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:report.passed,checks:report.checks.length,out,failure:report.failure}));}

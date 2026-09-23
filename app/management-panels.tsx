@@ -140,6 +140,12 @@ function offsetDate(value: string, weeks: number) {
   return date.toISOString().slice(0, 10);
 }
 
+export function phaseSchedule(activityDate: string, phaseId: string) {
+  const phase = PHASES.find((row) => row.id === phaseId);
+  if (!activityDate || !phase) return null;
+  return { startDate: offsetDate(activityDate, phase.start), due: offsetDate(activityDate, phase.end) };
+}
+
 function phaseLabel(phaseId?: string) {
   const phase = PHASES.find((row) => row.id === phaseId);
   return phase ? `${phase.id} ${phase.name}` : "未分階段";
@@ -221,18 +227,6 @@ function Dialog({
       onCancel={(event) => {
         event.preventDefault();
         close();
-      }}
-      onClick={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        if (
-          event.clientX < rect.left ||
-          event.clientX > rect.right ||
-          event.clientY < rect.top ||
-          event.clientY > rect.bottom
-        ) {
-          close();
-        }
       }}
     >
       <div className="mgmt-dialog-head">
@@ -520,12 +514,12 @@ export function TasksPanel({ data, userName, busy, onSave }: ManagementPanelProp
     const activityId = (form.elements.namedItem("activityId") as HTMLSelectElement | null)?.value;
     const phaseId = (form.elements.namedItem("phaseId") as HTMLSelectElement | null)?.value;
     const activity = data.activities.find((row) => row.id === activityId);
-    const phase = PHASES.find((row) => row.id === phaseId);
-    if (!activity?.date || !phase) return;
+    const schedule = phaseSchedule(activity?.date ?? "", phaseId ?? "");
+    if (!schedule) return;
     const startInput = form.elements.namedItem("startDate") as HTMLInputElement | null;
     const dueInput = form.elements.namedItem("due") as HTMLInputElement | null;
-    if (startInput) startInput.value = offsetDate(activity.date, phase.start);
-    if (dueInput) dueInput.value = offsetDate(activity.date, phase.end);
+    if (startInput) startInput.value = schedule.startDate;
+    if (dueInput) dueInput.value = schedule.due;
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -769,6 +763,7 @@ export function MeetingsPanel({ data, userName, busy, onSave }: ManagementPanelP
 
 const orgRoles = [
   ["系統管理員", "維護全工作空間、資料、帳號核可、權限與同步。"],
+  ["一般管理員", "協助管理成員與活動，可核可總召以下職務。"],
   ["總召", "跨活動掌握資源、優先順序、報名名單與重大卡點。"],
   ["幹部／一般成員", "依被核可的帳號登入，查看工作並依角色範圍協作。"],
 ];

@@ -33,6 +33,14 @@ export async function PUT(request: Request) {
   const current = await env.DB!.prepare("SELECT data,version FROM workspace_states WHERE id = 1").first<{data:string;version:number}>();
   const currentVersion = current?.version ?? 0;
   if (body.version !== currentVersion) return Response.json({ state: readState(current?.data), version: currentVersion }, { status: 409, headers: noStore });
+  const previousState = readState(current?.data);
+  const nextState = coreState(body.state);
+  const dateError = dateChangeError(previousState, nextState, auth.user!.role, auth.user!.displayName);
+  if (dateError) return Response.json({ error: dateError }, { status: 403, headers: noStore });
+  if (action === "reschedule") {
+    const error = rescheduleError(previousState, nextState, auth.user!.role, auth.user!.displayName);
+    if (error) return Response.json({ error }, { status: 403, headers: noStore });
+  }
   const nextVersion = currentVersion + 1, now = new Date().toISOString(), serialized = JSON.stringify(coreState(body.state));
   // D1 batch is a sequential SQL transaction. Check the same CAS condition
   // for the audit before writing state, avoiding connection-local changes().
@@ -53,6 +61,46 @@ export async function PUT(request: Request) {
 
 function coreState(state: { activities: unknown[]; tasks: unknown[]; meetings: unknown[]; notices: unknown[] }) {
   return { activities: state.activities, tasks: state.tasks, meetings: state.meetings, notices: state.notices };
+}
+
+function dateChangeError(before: ReturnType<typeof coreState>, after: ReturnType<typeof coreState>, role: string, name: string) {
+  if (["admin", "manager", "coordinator"].includes(role)) return "";
+  const changed = (key: "activities" | "tasks" | "meetings", fields: string[], owner?: string) => {
+    const next = new Map((after[key] as Record<string, unknown>[]).map((row) => [row.id, row]));
+    if (next.size !== after[key].length) return "行程識別碼不能重複";
+    for (const row of before[key] as Record<string, unknown>[]) {
+      const updated = next.get(row.id);
+      if (!updated) return "不能透過工作空間更新刪除既有行程";
+      if (key === "tasks" && row.assignee !== updated.assignee && String(row.assignee ?? "").trim() !== name.trim()) return "不能改派其他人的任務";
+      if (fields.some((field) => row[field] !== updated[field]) && (!owner || String(row[owner] ?? "").trim() !== name.trim())) return "只能調整自己的任務日期，活動與會議由總召以上改期";
+    }
+    return "";
+  };
+  return changed("activities", ["date", "startDate", "endDate"])
+    || changed("tasks", ["startDate", "due"], "assignee")
+    || changed("meetings", ["time", "endTime"]);
+}
+
+function rescheduleError(before: ReturnType<typeof coreState>, after: ReturnType<typeof coreState>, role: string, name: string) {
+  const canManageAll = ["admin", "manager", "coordinator"].includes(role);
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  if (after.notices.length !== before.notices.length + 1 || !same(after.notices.slice(1), before.notices)) return "改期只能新增一筆異動通知";
+  const collection = (key: "activities" | "tasks" | "meetings", allowed: string[], owner: string) => {
+    const oldRows = before[key] as Record<string, unknown>[];
+    const newRows = after[key] as Record<string, unknown>[];
+    if (oldRows.length !== newRows.length || oldRows.some((row, index) => row.id !== newRows[index]?.id)) return "改期不能增刪或重新排列資料";
+    for (let index = 0; index < oldRows.length; index++) {
+      const oldRow = oldRows[index], newRow = newRows[index];
+      if (same(oldRow, newRow)) continue;
+      if (!canManageAll && (key !== "tasks" || String(oldRow[owner] ?? "").trim() !== name.trim())) return "只能調整自己的任務，活動與會議由總召以上改期";
+      const unchanged = Object.keys({ ...oldRow, ...newRow }).filter((field) => !allowed.includes(field)).every((field) => same(oldRow[field], newRow[field]));
+      if (!unchanged) return "改期只能修改日期相關欄位";
+    }
+    return "";
+  };
+  return collection("activities", ["date", "startDate", "endDate"], "owner")
+    || collection("tasks", ["startDate", "due"], "assignee")
+    || collection("meetings", ["time", "endTime", "status"], "organizer");
 }
 
 function readState(raw?: string) {

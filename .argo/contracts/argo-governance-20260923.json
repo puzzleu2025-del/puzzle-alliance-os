@@ -1,0 +1,138 @@
+{
+  "REQUESTED_CHANGE": "依使用者附件 Phase 0–16 修復協會 ARGO 執行治理與第二大腦；使用者 2026-09-24 要求繼續",
+  "ALLOWED_SCOPE": {
+    ".argo/contracts/argo-governance-20260923.json": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    ".argo/policy.json": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    ".codex/hooks.json": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    ".githooks/pre-commit": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    ".gitignore": "追蹤專案 hooks 並忽略本地治理證據與Python快取",
+    "AGENTS.md": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "app/login-form.tsx": "baseline 確認 username HTML pattern 在 Chrome v regex 無效；僅 escape hyphen，保留原允許字元與UI",
+    "docs/argo_audit.md": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "docs/argo_governance.md": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "scripts/argo/govern.py": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "scripts/argo/hook.py": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "scripts/argo/ledger.py": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "scripts/argo/regression.mjs": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "scripts/argo/run.mjs": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案",
+    "tests/argo/test_govern.py": "本次 ARGO 治理、範圍保護、Regression 或第二大腦整合的專用檔案"
+  },
+  "PROTECTED_SCOPE": [
+    "app/**",
+    "components/**",
+    "preview/**",
+    "hooks/**",
+    "lib/**",
+    "db/**",
+    "drizzle/**",
+    "*.css",
+    "**/*.css",
+    ".github/**",
+    ".openai/**",
+    "build/**",
+    "package*.json",
+    "*config*",
+    "cloudflare-env.d.ts",
+    ".env*",
+    "AGENTS.md",
+    ".argo/policy.json",
+    "scripts/**",
+    ".codex/**",
+    ".githooks/**"
+  ],
+  "EXPECTED_SIDE_EFFECTS": [
+    "普通 git commit 需 gate PASS",
+    "Codex hooks 需要使用者原生信任後才自動執行",
+    "Login pattern恢復瀏覽器字元驗證，不變UI"
+  ],
+  "acceptance": [
+    "full diff allowlist",
+    "regression screenshots",
+    "append-only raw and memory readback",
+    "independent reviewer"
+  ],
+  "executor": "root",
+  "reviewer": "audit_repo",
+  "protected_exceptions": {
+    ".argo/policy.json": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    ".codex/hooks.json": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    ".githooks/pre-commit": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    "AGENTS.md": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    "app/login-form.tsx": {
+      "user_authorization": "任務最高規則允許修復目前已損壞功能；baseline實證regex錯誤，最小修復"
+    },
+    "scripts/argo/govern.py": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    "scripts/argo/hook.py": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    "scripts/argo/ledger.py": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    "scripts/argo/regression.mjs": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    },
+    "scripts/argo/run.mjs": {
+      "user_authorization": "使用者本次明確要求建立專案永久指引、可執行Gate與Agent流程"
+    }
+  },
+  "checks": {
+    "governance": {
+      "argv": [
+        "C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/argo",
+        "-p",
+        "test_govern.py",
+        "-v"
+      ],
+      "timeout": 180
+    },
+    "typecheck": {
+      "argv": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "timeout": 180
+    },
+    "lint": {
+      "argv": [
+        "node",
+        "node_modules/eslint/bin/eslint.js",
+        "app/login-form.tsx"
+      ],
+      "timeout": 180
+    },
+    "build": {
+      "argv": [
+        "node",
+        "scripts/run-framework.mjs",
+        "build"
+      ],
+      "timeout": 600
+    },
+    "application_regression": {
+      "argv": [
+        "node",
+        "scripts/argo/regression.mjs",
+        "--repo=.",
+        "--out=.argo/runtime/argo-governance-20260923/screenshots-after",
+        "--compare=.argo/runtime/baseline-before"
+      ],
+      "timeout": 300
+    }
+  }
+}

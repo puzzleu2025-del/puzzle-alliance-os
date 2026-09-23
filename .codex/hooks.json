@@ -1,0 +1,8 @@
+{
+  "description": "Puzzle Alliance ARGO retrieval and completion gate. Requires native Codex hook trust.",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "\"C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe\" \"C:/Users/kuen/Documents/puzzle union/scripts/argo/hook.py\"", "timeout": 30}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe\" \"C:/Users/kuen/Documents/puzzle union/scripts/argo/hook.py\"", "timeout": 30}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "\"C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe\" \"C:/Users/kuen/Documents/puzzle union/scripts/argo/hook.py\"", "timeout": 30}]}]
+  }
+}

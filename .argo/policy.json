@@ -1,0 +1,16 @@
+{
+  "project_id": "project-puzzle-union",
+  "vault": "E:/個人營運記憶庫",
+  "protected": ["app/**", "components/**", "preview/**", "hooks/**", "lib/**", "db/**", "drizzle/**", "*.css", "**/*.css", ".github/**", ".openai/**", "build/**", "package*.json", "*config*", "cloudflare-env.d.ts", ".env*", "AGENTS.md", ".argo/policy.json", "scripts/**", ".codex/**", ".githooks/**"],
+  "required_checks": ["governance", "application_regression"],
+  "compression_threshold_entries": 5,
+  "memory": {
+    "raw": "14-詳細紀錄/project-puzzle-union/argo-raw",
+    "projects": "07-專案",
+    "working": "12-狀態/project-puzzle-union.md",
+    "specs": "08-對話/conversation-puzzle-union-auth-profile-20260923.md",
+    "decisions": "03-決策/project-puzzle-union",
+    "regressions": "04-知識/回歸紀錄/project-puzzle-union",
+    "summary": "05-摘要/project-puzzle-union"
+  }
+}

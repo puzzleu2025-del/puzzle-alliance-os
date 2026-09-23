@@ -1,0 +1,3 @@
+#!/bin/sh
+# Local completion gate; --no-verify can bypass Git hooks, so this is not server policy.
+exec node scripts/argo/run.mjs gate

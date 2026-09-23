@@ -42,9 +42,14 @@ next-env.d.ts
 # Checkout-local execution profile and tool state; never publish them.
 /.sites-runtime/
 /.agents/
-/.codex/
+/.codex/*
+!/.codex/hooks.json
 /outputs/
 /work/
 /pages-dist/
 /deliverables/
 .chrome-*/
+
+# ARGO task evidence and Python runtime caches
+/.argo/runtime/
+__pycache__/

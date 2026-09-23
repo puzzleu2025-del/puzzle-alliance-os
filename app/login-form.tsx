@@ -45,7 +45,7 @@ export default function LoginForm() {
       <h2>{mode === "login" ? "登入工作空間" : mode === "register" ? "申請加入" : "忘記密碼"}</h2>
       {mode === "register" && <><label htmlFor="register-name">姓名</label><input id="register-name" name="displayName" autoComplete="name" required maxLength={100}/></>}
       <label htmlFor="login-username">登入帳號</label>
-      <input id="login-username" name="username" autoComplete="username" required minLength={4} maxLength={32} pattern="[A-Za-z0-9._-]+" />
+      <input id="login-username" name="username" autoComplete="username" required minLength={4} maxLength={32} pattern={"[A-Za-z0-9._\\-]+"} />
       {mode === "register" && <><label htmlFor="register-phone">聯絡電話</label><input id="register-phone" name="phone" type="tel" autoComplete="tel" required minLength={8} maxLength={24}/><label htmlFor="register-email">Email（選填）</label><input id="register-email" name="email" type="email" autoComplete="email" maxLength={254}/><label htmlFor="register-organization">所屬單位（選填）</label><input id="register-organization" name="organization" maxLength={100}/><label htmlFor="register-position">職務／身分（選填）</label><input id="register-position" name="position" maxLength={100}/><p className="fineprint">姓名與聯絡方式只供管理員核對申請及團隊聯絡。</p></>}
       {mode !== "forgot" && <><label htmlFor="login-password">密碼</label><input id="login-password" name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} maxLength={256}/></>}
       {mode === "register" && <><label htmlFor="register-confirm">再次輸入密碼</label><input id="register-confirm" name="confirmPassword" type="password" autoComplete="new-password" required minLength={6} maxLength={256}/></>}

@@ -43,6 +43,13 @@
       "when": 1790124050007,
       "tag": "0005_colossal_the_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790174335246,
+      "tag": "0006_crazy_maria_hill",
+      "breakpoints": true
     }
   ]
 }

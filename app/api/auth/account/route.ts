@@ -5,7 +5,30 @@ export async function GET() {
   const user = await getMember();
   if (!user) return Response.json({ error: "請先登入" }, { status: 401 });
   const row = await env.DB!.prepare("SELECT user_id FROM admin_credentials WHERE user_id=?").bind(user.userId).first();
-  return Response.json({ username: user.username, email: user.email, displayName: user.displayName, hasPassword: !!row }, { headers: { "Cache-Control": "no-store" } });
+  const profile = await env.DB!.prepare("SELECT phone,organization,position FROM members WHERE user_id=?").bind(user.userId).first<{phone:string;organization:string;position:string}>();
+  return Response.json({ username: user.username, email: user.email, displayName: user.displayName, phone: profile?.phone || "", organization: profile?.organization || "", position: profile?.position || "", hasPassword: !!row }, { headers: { "Cache-Control": "private, no-store" } });
+}
+
+export async function PATCH(request: Request) {
+  const csrf = csrfError(request); if (csrf) return csrf;
+  const user = await getMember(); if (!user) return Response.json({ error: "請先登入" }, { status: 401 });
+  let body: { displayName?: unknown; email?: unknown; phone?: unknown; organization?: unknown; position?: unknown };
+  try { const parsed: unknown = await request.json(); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(); body = parsed as typeof body; } catch { return Response.json({ error: "資料格式錯誤" }, { status: 400 }); }
+  const displayName = typeof body.displayName === "string" ? body.displayName.trim() : "";
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const phone = typeof body.phone === "string" ? body.phone.trim() : "";
+  const organization = typeof body.organization === "string" ? body.organization.trim() : "";
+  const position = typeof body.position === "string" ? body.position.trim() : "";
+  if (!displayName || displayName.length > 100) return Response.json({ error: "請填寫姓名（最多 100 字）" }, { status: 400 });
+  if (email.length > 254 || (email && !/^\S+@\S+\.\S+$/.test(email))) return Response.json({ error: "Email 格式不正確" }, { status: 400 });
+  if (phone && (!/^[+0-9()\-\s]{8,24}$/.test(phone) || phone.replace(/\D/g, "").length < 7)) return Response.json({ error: "電話格式不正確" }, { status: 400 });
+  if (organization.length > 100 || position.length > 100) return Response.json({ error: "所屬單位或職務過長" }, { status: 400 });
+  const now = new Date().toISOString();
+  await env.DB!.batch([
+    env.DB!.prepare("UPDATE members SET display_name=?,email=?,phone=?,organization=?,position=? WHERE user_id=? AND status='active'").bind(displayName, email, phone, organization, position, user.userId),
+    env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) VALUES (?,'update_profile','member',?,?)").bind(user.userId, user.userId, now),
+  ]);
+  return Response.json({ ok: true }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function POST(request: Request) {

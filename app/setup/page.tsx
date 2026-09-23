@@ -13,7 +13,7 @@ export default async function SetupPage() {
     <div className="brand-mark" aria-hidden="true">▦</div>
     <p className="eyebrow">PUZZLE ALLIANCE OS</p>
     <h1>啟用系統管理員</h1>
-    {!owner ? <p role="alert">請以站點擁有者身分開啟此頁。</p>
+    {!owner ? <p role="alert">請先<a href="/signin-with-chatgpt?return_to=%2Fsetup" target="_top">使用 ChatGPT 驗證站點擁有者身分</a>，再設定管理員密碼。</p>
       : !env.DB ? <p role="alert">資料庫尚未就緒，請稍後重試。</p>
       : admin?.credential_id ? <p>管理員帳號已啟用。請返回首頁登入。</p>
       : <SetupForm />}

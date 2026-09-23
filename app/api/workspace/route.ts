@@ -22,7 +22,8 @@ export async function GET() {
 export async function PUT(request: Request) {
   const csrf = csrfError(request); if (csrf) return csrf;
   const auth = await authorize(); if (auth.error) return auth.error;
-  if (auth.user!.role !== "admin") return Response.json({ error: "只有系統管理員可以修改共用工作空間" }, { status: 403 });
+  // Every approved member works in the same activity, task and meeting space.
+  // Registration responses and member credentials use separate protected APIs.
   let body: { state?: unknown; version?: number; action?: string };
   try { body = await request.json(); } catch { return Response.json({ error: "資料格式錯誤" }, { status: 400 }); }
   if (!validState(body.state) || !Number.isInteger(body.version) || JSON.stringify(body.state).length > 750_000) return Response.json({ error: "資料格式不完整" }, { status: 400 });

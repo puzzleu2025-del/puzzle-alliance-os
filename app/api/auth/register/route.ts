@@ -6,6 +6,8 @@ const usernamePattern = /^[a-z0-9][a-z0-9._-]{3,31}$/;
 export async function POST(request: Request) {
   const csrf = csrfError(request); if (csrf) return csrf;
   if (!env.DB) return Response.json({ error: "資料庫尚未連線" }, { status: 503 });
+  const initialized = await env.DB.prepare("SELECT 1 FROM admin_credentials c JOIN members m ON m.user_id=c.user_id WHERE m.role='admin' AND m.status='active' LIMIT 1").first();
+  if (!initialized) return Response.json({ error: "系統管理員尚未啟用，暫時無法註冊" }, { status: 503 });
   let body: { username?: unknown; password?: unknown; displayName?: unknown; email?: unknown };
   try { const parsed: unknown = await request.json(); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(); body = parsed as typeof body; } catch { return Response.json({ error: "資料格式錯誤" }, { status: 400 }); }
   const username = typeof body.username === "string" ? body.username.trim().toLowerCase() : "";

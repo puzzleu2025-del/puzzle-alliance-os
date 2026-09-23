@@ -3,6 +3,7 @@ import { csrfError, getMember } from "@/app/admin-auth";
 
 export const dynamic = "force-dynamic";
 const blank = { activities: [], tasks: [], meetings: [], notices: [] };
+const noStore = { "Cache-Control": "private, no-store" };
 const allowedActions = new Set(["create_activity", "create_task", "create_meeting", "complete_task", "reschedule", "confirm_meeting", "update_meeting_attendance", "read_notice", "update_workspace"]);
 
 async function authorize() {
@@ -16,7 +17,7 @@ export async function GET() {
   const auth = await authorize(); if (auth.error) return auth.error;
   const row = await env.DB!.prepare("SELECT data,version,updated_at FROM workspace_states WHERE id = 1").first<{data:string;version:number;updated_at:string}>();
   const audit = await env.DB!.prepare("SELECT a.id, COALESCE(m.display_name,a.actor_id) AS actor, a.action, a.created_at AS createdAt FROM audit_logs a LEFT JOIN members m ON m.user_id=a.actor_id ORDER BY a.id DESC LIMIT 50").all();
-  return Response.json({ state: row ? JSON.parse(row.data) : blank, version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: auth.user!.role, audit: audit.results });
+  return Response.json({ state: readState(row?.data), version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: auth.user!.role, audit: audit.results }, { headers: noStore });
 }
 
 export async function PUT(request: Request) {
@@ -31,8 +32,8 @@ export async function PUT(request: Request) {
   if (!allowedActions.has(action)) return Response.json({ error: "操作類型無效" }, { status: 400 });
   const current = await env.DB!.prepare("SELECT data,version FROM workspace_states WHERE id = 1").first<{data:string;version:number}>();
   const currentVersion = current?.version ?? 0;
-  if (body.version !== currentVersion) return Response.json({ state: current ? JSON.parse(current.data) : blank, version: currentVersion }, { status: 409 });
-  const nextVersion = currentVersion + 1, now = new Date().toISOString(), serialized = JSON.stringify(body.state);
+  if (body.version !== currentVersion) return Response.json({ state: readState(current?.data), version: currentVersion }, { status: 409, headers: noStore });
+  const nextVersion = currentVersion + 1, now = new Date().toISOString(), serialized = JSON.stringify(coreState(body.state));
   // D1 batch is a sequential SQL transaction. Check the same CAS condition
   // for the audit before writing state, avoiding connection-local changes().
   // A stale version makes both statements no-ops; any failure rolls both back.
@@ -45,9 +46,21 @@ export async function PUT(request: Request) {
   const [, write] = await env.DB!.batch([audit, stateWrite]);
   if ((write.meta.changes ?? 0) !== 1) {
     const latest = await env.DB!.prepare("SELECT data,version FROM workspace_states WHERE id=1").first<{data:string;version:number}>();
-    return Response.json({ state: latest ? JSON.parse(latest.data) : blank, version: latest?.version ?? 0 }, { status: 409 });
+    return Response.json({ state: readState(latest?.data), version: latest?.version ?? 0 }, { status: 409, headers: noStore });
   }
-  return Response.json({ version: nextVersion, updatedAt: now });
+  return Response.json({ version: nextVersion, updatedAt: now }, { headers: noStore });
+}
+
+function coreState(state: { activities: unknown[]; tasks: unknown[]; meetings: unknown[]; notices: unknown[] }) {
+  return { activities: state.activities, tasks: state.tasks, meetings: state.meetings, notices: state.notices };
+}
+
+function readState(raw?: string) {
+  if (!raw) return blank;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return validState(parsed) ? coreState(parsed) : blank;
+  } catch { return blank; }
 }
 
 function validState(value: unknown): value is {activities:unknown[];tasks:unknown[];meetings:unknown[];notices:unknown[]} {

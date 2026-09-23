@@ -54,6 +54,7 @@ export default function LoginForm() {
       <button className="primary wide" disabled={busy}>{busy ? "處理中…" : mode === "login" ? "登入" : mode === "register" ? "送出申請" : "送出重設申請"}</button>
     </form>
     {mode === "login" ? <button className="auth-link" type="button" onClick={() => switchMode("forgot")}>忘記密碼？</button> : <button className="auth-link" type="button" onClick={() => switchMode("login")}>返回登入</button>}
+    {mode === "login" && <p className="fineprint">舊版 GitHub Pages 的本機帳號不會自動同步；請在這裡重新申請，或請系統管理員新增帳號。</p>}
     {mode === "forgot" && <p className="fineprint">重設申請會交由系統管理員核對，不會寄出自動郵件。</p>}
   </>;
 }

@@ -9,7 +9,8 @@ const hex = (bytes: Uint8Array) => Array.from(bytes, b => b.toString(16).padStar
 export const randomToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 export async function tokenHash(token: string) { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))); }
 export async function passwordHash(password: string, salt: string) {
-  return new Promise<string>((resolve, reject) => pbkdf2(password, salt, 600_000, 32, "sha256", (error, key) => error ? reject(error) : resolve(key.toString("hex"))));
+  // The production Worker runtime caps one PBKDF2 call at 100,000 rounds.
+  return new Promise<string>((resolve, reject) => pbkdf2(password, salt, 100_000, 32, "sha256", (error, key) => error ? reject(error) : resolve(key.toString("hex"))));
 }
 export async function verifyPassword(password: string, salt: string, hash: string) {
   const actual = await passwordHash(password, salt);

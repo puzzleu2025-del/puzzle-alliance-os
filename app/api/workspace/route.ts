@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { csrfError, getAdmin } from "@/app/admin-auth";
+import { csrfError, getMember } from "@/app/admin-auth";
 
 export const dynamic = "force-dynamic";
 const blank = { activities: [], tasks: [], meetings: [], notices: [] };
@@ -7,8 +7,8 @@ const allowedActions = new Set(["create_activity", "create_task", "create_meetin
 
 async function authorize() {
   if (!env.DB) return { error: Response.json({ error: "資料庫尚未連線" }, { status: 503 }) };
-  const user = await getAdmin();
-  if (!user) return { error: Response.json({ error: "請先登入系統管理員帳號" }, { status: 401 }) };
+  const user = await getMember();
+  if (!user) return { error: Response.json({ error: "請先登入已核可帳號" }, { status: 401 }) };
   return { user };
 }
 
@@ -16,12 +16,13 @@ export async function GET() {
   const auth = await authorize(); if (auth.error) return auth.error;
   const row = await env.DB!.prepare("SELECT data,version,updated_at FROM workspace_states WHERE id = 1").first<{data:string;version:number;updated_at:string}>();
   const audit = await env.DB!.prepare("SELECT a.id, COALESCE(m.display_name,a.actor_id) AS actor, a.action, a.created_at AS createdAt FROM audit_logs a LEFT JOIN members m ON m.user_id=a.actor_id ORDER BY a.id DESC LIMIT 50").all();
-  return Response.json({ state: row ? JSON.parse(row.data) : blank, version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: "admin", audit: audit.results });
+  return Response.json({ state: row ? JSON.parse(row.data) : blank, version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: auth.user!.role, audit: audit.results });
 }
 
 export async function PUT(request: Request) {
   const csrf = csrfError(request); if (csrf) return csrf;
   const auth = await authorize(); if (auth.error) return auth.error;
+  if (auth.user!.role !== "admin") return Response.json({ error: "只有系統管理員可以修改共用工作空間" }, { status: 403 });
   let body: { state?: unknown; version?: number; action?: string };
   try { body = await request.json(); } catch { return Response.json({ error: "資料格式錯誤" }, { status: 400 }); }
   if (!validState(body.state) || !Number.isInteger(body.version) || JSON.stringify(body.state).length > 750_000) return Response.json({ error: "資料格式不完整" }, { status: 400 });

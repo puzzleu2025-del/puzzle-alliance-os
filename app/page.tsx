@@ -1,11 +1,11 @@
-import { getAdmin } from "./admin-auth";
+import { getMember } from "./admin-auth";
 import LoginForm from "./login-form";
 import Workspace from "./workspace";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const user = await getAdmin();
+  const user = await getMember();
   if (!user) {
     return (
       <main className="signin-page">
@@ -19,5 +19,5 @@ export default async function Home() {
       </main>
     );
   }
-  return <Workspace user={{ id: user.userId, email: user.email, name: user.displayName }} />;
+  return <Workspace user={{ id: user.userId, email: user.email, name: user.displayName, role: user.role }} />;
 }

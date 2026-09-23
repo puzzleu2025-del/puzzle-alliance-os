@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import "./management-panels.css";
+import type { RegistrationForm, RegistrationSubmission } from "./registration-types";
 
 export type Activity = {
   id: string;
@@ -92,6 +93,8 @@ export type State = {
   tasks: Task[];
   meetings: Meeting[];
   notices: Notice[];
+  registrationForms?: RegistrationForm[];
+  registrationSubmissions?: RegistrationSubmission[];
 };
 
 export type ManagementPanelProps = {
@@ -99,6 +102,7 @@ export type ManagementPanelProps = {
   userName: string;
   busy: boolean;
   onSave: (next: State, action: string) => Promise<boolean>;
+  onOpenRegistrations?: (activityId: string) => void;
 };
 
 const uid = () => crypto.randomUUID();
@@ -331,7 +335,7 @@ function Gantt({ activity, tasks }: { activity: Activity; tasks: Task[] }) {
   );
 }
 
-export function ActivitiesPanel({ data, userName, busy, onSave }: ManagementPanelProps) {
+export function ActivitiesPanel({ data, userName, busy, onSave, onOpenRegistrations }: ManagementPanelProps) {
   const [creating, setCreating] = useState(false);
   const [detail, setDetail] = useState<Activity | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -415,9 +419,10 @@ export function ActivitiesPanel({ data, userName, busy, onSave }: ManagementPane
                   <div><dt>工作組</dt><dd>{activity.teams?.join("、") || "未設定"}</dd></div>
                 </dl>
                 <div className="meter"><i style={{ width: `${progress}%` }} /></div>
-                <button className="mgmt-wide-button" onClick={() => setDetail(activity)}>
-                  查看活動詳情與甘特圖
-                </button>
+                <div className="page-actions">
+                  <button className="mgmt-wide-button" onClick={() => setDetail(activity)}>查看活動詳情與甘特圖</button>
+                  {onOpenRegistrations && <button className="mgmt-wide-button" onClick={() => onOpenRegistrations(activity.id)}>報名表單</button>}
+                </div>
               </article>
             );
           })}
@@ -763,9 +768,9 @@ export function MeetingsPanel({ data, userName, busy, onSave }: ManagementPanelP
 }
 
 const orgRoles = [
-  ["系統管理員", "維護全工作空間、資料、權限與同步；目前唯一啟用的登入角色。"],
-  ["總召", "跨活動掌握資源、優先順序與重大卡點；第一版尚未開放登入權限。"],
-  ["幹部／一般成員", "依任務執行與回報；第一版先保留責任設計，尚未建立帳號。"],
+  ["系統管理員", "維護全工作空間、資料、帳號核可、權限與同步。"],
+  ["總召", "跨活動掌握資源、優先順序、報名名單與重大卡點。"],
+  ["幹部／一般成員", "依被核可的帳號登入，查看工作並依角色範圍協作。"],
 ];
 const activityRoles = [
   ["活動總召", "對單一活動的成果、日期、預算與跨組協調負責。"],
@@ -792,7 +797,7 @@ export function RolesPanel({ data, userName }: ManagementPanelProps) {
 
   return <>
     <div className="page-heading"><div><h2>組織與角色</h2><p className="muted">角色的目的，是讓決策、代理與執行責任在交接時仍然清楚。</p></div></div>
-    <section className="mgmt-admin-callout" aria-label="目前啟用權限"><div className="role-icon">♙</div><div><p className="eyebrow">唯一啟用中的登入角色</p><h3>{userName} · 系統管理員</h3><p>可管理所有活動、任務、會議與系統資料。活動上的總召、代理與主責是工作責任，不等於系統帳號權限。</p></div></section>
+    <section className="mgmt-admin-callout" aria-label="目前登入權限"><div className="role-icon">♙</div><div><p className="eyebrow">目前登入身分</p><h3>{userName}</h3><p>系統帳號角色決定可使用的功能；活動上的總召、代理與主責則描述實際工作責任。</p></div></section>
     <div className="mgmt-role-columns"><section className="panel"><h3>組織角色</h3><p className="muted">決定跨活動治理與系統使用範圍。</p><div className="mgmt-role-list">{orgRoles.map(([name, description]) => <article key={name}><b>{name}</b><p>{description}</p></article>)}</div></section><section className="panel"><h3>活動角色</h3><p className="muted">只界定特定活動或任務的實際責任邊界。</p><div className="mgmt-role-list">{activityRoles.map(([name, description]) => <article key={name}><b>{name}</b><p>{description}</p></article>)}</div></section></div>
     <section className="panel mgmt-assignment-panel"><div className="mgmt-card-head"><div><h3>目前指派概況</h3><p className="muted">直接取自活動與任務資料，不另外建立權限。</p></div><span className="badge">{assignmentRows.length} 筆</span></div>{assignmentRows.length ? <div className="mgmt-table-wrap"><table><thead><tr><th>活動／任務</th><th>責任</th><th>人員</th></tr></thead><tbody>{assignmentRows.map((row) => <tr key={row.id}><td><b>{row.scope}</b></td><td>{row.role}</td><td>{row.people}</td></tr>)}</tbody></table></div> : <p className="mgmt-empty-inline">尚未建立活動或任務指派。</p>}</section>
   </>;

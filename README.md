@@ -6,7 +6,15 @@
 
 推送到 `master` 後，`.github/workflows/pages-preview.yml` 會建立並發布靜態預覽。儲存庫第一次啟用時，請在 GitHub 的 **Settings → Pages → Build and deployment** 選擇 **GitHub Actions**。
 
-GitHub Pages 無法執行伺服器端 API 或 D1，因此正式的登入、密碼與跨裝置資料同步必須部署 Worker 後端。靜態預覽只展示產品介面與瀏覽器內的操作狀態，不會偽造一組可登入的系統管理員密碼。
+GitHub Pages 無法執行伺服器端 API 或 D1。線上互動版因此提供瀏覽器內的登入、註冊、核可與成員管理，資料只保存在目前瀏覽器；安全的正式登入與跨裝置共用資料仍需部署 Worker 後端。
+
+## 活動報名中心
+
+- 每場活動有獨立的主要報名表，可使用短答、段落、電子郵件、電話、數字、日期、單選、下拉、複選與同意勾選題。
+- 公開連結只提供表單與送出功能，不公開其他人的填答；管理名單、顯示個資、對帳註記及 Excel 匯出需管理員權限。
+- 對帳可標示未對帳、待確認、已對帳、已退款或無需付款，並保存備註；Excel 會一併輸出對帳與提醒欄位。
+- 系統依活動日期計算前 5 天與前 1 天的提醒日期，並可產生每位參加者的郵件內容。真正的自動寄信仍需正式 Worker、排程觸發器與郵件供應商密鑰；GitHub Pages 預覽不會在背景寄信。
+- GitHub Pages 預覽會把報名表、測試填答與對帳狀態保存在同一台裝置的瀏覽器中，方便跨分頁驗收；它不會跨裝置同步。正式版則使用 D1 的 `registration_forms` 與 `registration_submissions` 資料表。
 
 ## Prerequisites
 
@@ -34,7 +42,7 @@ On portable, `npm run dev` uses `vinext dev` with HMR, starting at port 5173. Vi
 
 For browser QA on managed Linux, use `sites-preview start`. The project's dev script runs Vite and accepts the supervisor's `--host 0.0.0.0 --port 4173 --strictPort` arguments. The internal browser uses `http://terminal.local:4173/`; it is not a user-facing URL. The supervisor owns the preview lifecycle. The ignored local profile survives the supervisor's cleared process environment.
 
-The portable profile supplies a loopback-only development identity for local requests. Visit `/signin-with-chatgpt?return_to=/` to start the local session and `/signout-with-chatgpt?return_to=/` to sign out. The identity is labeled `嘉駿` in the interface and uses a non-routable local address internally. Mock auth is disabled in the managed-linux profile and is not included in production builds; hosted authentication remains dispatch-owned.
+The workspace uses its own username/password session and D1 membership records. The optional starter authentication helper described below is not used by the application login page.
 
 The Worker uses `vinext/server/fetch-handler`, including Vinext's config-aware image handling. After building, `npm start` runs that Worker locally through Wrangler on `127.0.0.1`, sharing `.wrangler/state` with dev preview and local D1 migrations; it does not deploy the site or simulate sign-in. Use the URL printed by the server. Pass `npm start -- --port <port>` to select a different built-preview port.
 
@@ -45,7 +53,7 @@ Local tool usage metrics are disabled by default. Set `WRANGLER_SEND_METRICS=tru
 ## Included Shape
 
 - edit site code under `app/`
-- `app/chatgpt-auth.ts` provides optional dispatch-owned ChatGPT sign-in helpers
+- `app/chatgpt-auth.ts` is an unused starter helper; workspace login uses `app/admin-auth.ts`
 - `.openai/hosting.json` declares optional Sites D1 and R2 bindings
 - `vite.config.ts` simulates declared bindings for local development
 - `db/index.ts` reads the D1 binding from the Cloudflare Worker environment
@@ -85,6 +93,8 @@ export default async function Home() {
 ```
 
 ## Optional Dispatch-Owned ChatGPT Sign-In
+
+This starter reference is retained for future hosting integrations. Puzzle Alliance OS does not expose it on the login page and does not use it for workspace membership.
 
 Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs optional or required ChatGPT sign-in:
 

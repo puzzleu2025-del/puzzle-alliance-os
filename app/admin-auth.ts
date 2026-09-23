@@ -1,12 +1,10 @@
 import { env } from "cloudflare:workers";
 import { headers } from "next/headers";
 import { pbkdf2, timingSafeEqual } from "node:crypto";
-import { getChatGPTUser } from "./chatgpt-auth";
 
 export const SESSION_COOKIE = "puzzle_admin_session";
 export const SESSION_SECONDS = 60 * 60 * 12;
-const ADMIN_DISPLAY_NAME = "嘉駿";
-export type Admin = { userId: string; email: string; displayName: string; via: "chatgpt" | "password" };
+export type MemberSession = { userId: string; username: string; email: string; displayName: string; role: string; via: "password" };
 const hex = (bytes: Uint8Array) => Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
 export const randomToken = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 export async function tokenHash(token: string) { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))); }
@@ -28,21 +26,16 @@ export async function currentToken() {
   const h = await headers();
   return h.get("cookie")?.split(";").map(s => s.trim()).find(s => s.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1) || "";
 }
-export async function getAdmin(): Promise<Admin | null> {
+export async function getMember(): Promise<MemberSession | null> {
   if (!env.DB) return null;
-  const trusted = await getChatGPTUser();
-  if (trusted) {
-    // Only the hosting authentication gateway may bootstrap an administrator.
-    await env.DB.prepare("INSERT OR IGNORE INTO members (user_id,email,display_name,role,status,created_at) SELECT ?,?,?,'admin','active',? WHERE NOT EXISTS (SELECT 1 FROM members WHERE role='admin' AND status='active')").bind(trusted.userId, trusted.email, ADMIN_DISPLAY_NAME, new Date().toISOString()).run();
-    // A trusted sign-in by the active administrator also repairs older mock/profile names.
-    await env.DB.prepare("UPDATE members SET display_name=?,email=? WHERE user_id=? AND role='admin' AND status='active'").bind(ADMIN_DISPLAY_NAME, trusted.email, trusted.userId).run();
-    const member = await env.DB.prepare("SELECT user_id AS userId,email,display_name AS displayName FROM members WHERE user_id=? AND role='admin' AND status='active'").bind(trusted.userId).first<Omit<Admin, "via">>();
-    if (member) return { ...member, via: "chatgpt" };
-  }
   const token = await currentToken();
   if (!/^[a-f0-9]{64}$/.test(token)) return null;
-  const member = await env.DB.prepare("SELECT m.user_id AS userId,m.email,m.display_name AS displayName FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND m.role='admin' AND m.status='active'").bind(await tokenHash(token), Date.now()).first<Omit<Admin, "via">>();
+  const member = await env.DB.prepare("SELECT m.user_id AS userId,m.username,m.email,m.display_name AS displayName,m.role FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND m.status='active'").bind(await tokenHash(token), Date.now()).first<Omit<MemberSession, "via">>();
   return member ? { ...member, via: "password" } : null;
+}
+export async function getAdmin() {
+  const member = await getMember();
+  return member?.role === "admin" ? member : null;
 }
 export async function rateLimited(key: string) {
   const now = Date.now(), window = 15 * 60_000;

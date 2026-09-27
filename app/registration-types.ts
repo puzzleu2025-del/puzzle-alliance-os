@@ -42,6 +42,8 @@ export type RegistrationForm = {
   title: string;
   description: string;
   status: RegistrationFormStatus;
+  owner?: string;
+  proxy?: string;
   fields: RegistrationField[];
   submitLabel?: string;
   confirmationMessage?: string;
@@ -172,6 +174,8 @@ export function normalizeRegistrationForm(value: unknown): RegistrationForm | nu
     title,
     description: normalizeRegistrationText(value.description, 5_000),
     status,
+    owner: normalizeRegistrationText(value.owner, 100) || undefined,
+    proxy: normalizeRegistrationText(value.proxy, 100) || undefined,
     fields,
     submitLabel: normalizeRegistrationText(value.submitLabel, 80) || undefined,
     confirmationMessage: normalizeRegistrationText(value.confirmationMessage, 1_000) || undefined,

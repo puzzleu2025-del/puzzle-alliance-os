@@ -62,12 +62,14 @@ try {
   await login(page,'kao19950411');check('Admin UI login',true);
   await status('Admin member list allowed',admin,'/api/members',200);
   await status('Create isolated member',admin,'/api/members',201,'POST',{username:'regression.member',displayName:'Regression Member',role:'member',password:'Regression-Local-Only-2026'});
-  await status('Create isolated coordinator',admin,'/api/members',201,'POST',{username:'regression.coordinator',displayName:'Regression Coordinator',role:'coordinator',password:'Regression-Local-Only-2026'});
+  const coordinatorResponse=await status('Create isolated coordinator',admin,'/api/members',201,'POST',{username:'regression.coordinator',displayName:'Regression Coordinator',role:'coordinator',password:'Regression-Local-Only-2026'});
+  const coordinatorId=(await coordinatorResponse.json()).member.id;
   await status('Coordinator API login',coordinator,'/api/auth/login',200,'POST',{username:'regression.coordinator',password:'Regression-Local-Only-2026'});
-  await status('Coordinator registration private API allowed',coordinator,'/api/registration-forms?activityId=regression-activity',200);
+  await status('Coordinator cannot access missing activity registration',coordinator,'/api/registration-forms?activityId=regression-activity',404);
   await status('Coordinator lower-role member list allowed',coordinator,'/api/members',200);
   const initial=await (await api(admin,'/api/workspace')).json();
-  await status('Save isolated activity',admin,'/api/workspace',200,'PUT',{state:{activities:[{id:'regression-activity',name:'Regression Activity',date:'2026-10-01',owner:'QA',status:'規劃中',description:'Isolated fixture'}],tasks:[],meetings:[],notices:[]},version:initial.version,action:'create_activity'});
+  await status('Save isolated activity',admin,'/api/workspace',200,'PUT',{state:{activities:[{id:'regression-activity',name:'Regression Activity',date:'2026-10-01',owner:'QA',status:'規劃中',description:'Isolated fixture',coordinatorIds:[coordinatorId]}],tasks:[],meetings:[],notices:[]},version:initial.version,action:'create_activity'});
+  await status('Assigned coordinator registration private API allowed',coordinator,'/api/registration-forms?activityId=regression-activity',200);
   await page.reload();await page.locator('.sync').filter({hasText:'已同步'}).waitFor();
   const labels=['營運總覽','活動管理','任務中心','報名表單','行事曆','會議協調','組織與角色','成員管理','通知中心','系統設定'];
   for(const label of labels){await page.getByRole('navigation',{name:'主要導覽',exact:true}).getByRole('button',{name:label,exact:true}).click();await page.getByRole('heading',{name:label,exact:true,level:1}).waitFor();check('Admin navigation '+label,true);}

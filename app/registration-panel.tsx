@@ -1,11 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import type { ManagementPanelProps, State } from "./management-panels";
+import { canConfigureActivity, type ManagementPanelProps, type State } from "./management-panels";
 import type { RegistrationField, RegistrationFieldType, RegistrationForm, RegistrationPaymentStatus, RegistrationSubmission } from "./registration-types";
 import { downloadRegistrationXlsx } from "./export-registrations";
 import { registrationReminderSchedule, reminderMessage, reminderRecipients, type ReminderKind } from "./registration-reminders";
 import RegistrationBuilder from "./registration-builder";
+import MemberSelect from "./member-select";
 import "./registration-panel.css";
 
 const uid = () => crypto.randomUUID();
@@ -18,14 +19,17 @@ const optionType = (type: RegistrationFieldType) => ["single_choice", "multiple_
 const mask = (value: string) => value ? `${value.slice(0, 1)}${"•".repeat(Math.min(8, Math.max(3, value.length - 1)))}` : "—";
 const paymentLabels: Record<RegistrationPaymentStatus, string> = { unpaid:"未對帳", checking:"待確認", paid:"已對帳", refunded:"已退款", not_required:"無需付款" };
 
-export default function RegistrationPanel({ data, busy, onSave, preview, initialActivityId }: ManagementPanelProps & { preview: boolean; initialActivityId?: string }) {
-  const [activityId, setActivityId] = useState(initialActivityId ?? data.activities[0]?.id ?? "");
+export default function RegistrationPanel({ data, userId, userName, userRole, memberOptions = [], busy, onSave, preview, initialActivityId }: ManagementPanelProps & { preview: boolean; initialActivityId?: string }) {
+  const accessibleActivities = data.activities.filter((row) => ["admin", "manager"].includes(userRole ?? "") || (row.coordinatorIds || row.traineeCoordinatorId ? Boolean(userId && (row.coordinatorIds?.includes(userId) || row.traineeCoordinatorId === userId)) : userRole === "coordinator" && [row.owner, row.proxy].some((person) => person?.trim() === userName.trim())));
+  const [activityId, setActivityId] = useState(initialActivityId ?? accessibleActivities[0]?.id ?? "");
   const [remoteForms, setRemoteForms] = useState<RegistrationForm[]>([]);
   const [remoteSubmissions, setRemoteSubmissions] = useState<RegistrationSubmission[]>([]);
   const [loading, setLoading] = useState(!preview && Boolean(initialActivityId ?? data.activities[0]?.id));
   const forms = preview ? (data.registrationForms ?? []) : remoteForms;
   const submissions = preview ? (data.registrationSubmissions ?? []) : remoteSubmissions;
   const activity = data.activities.find((row) => row.id === activityId);
+  const canEditForm = canConfigureActivity(activity, userId, userName, userRole);
+  const canSeePrivate = ["admin", "manager", "coordinator"].includes(userRole ?? "");
   const activityForms = forms.filter((form) => form.activityId === activityId);
   const [selectedId, setSelectedId] = useState("");
   const selected = activityForms.find((form) => form.id === selectedId) ?? activityForms[0];
@@ -64,6 +68,7 @@ export default function RegistrationPanel({ data, busy, onSave, preview, initial
     const next = form ? structuredClone(form) : {
       id: uid(), activityId, title: `${activity?.name ?? "活動"}報名表`, description: "",
       status: "draft" as const, fields: initialFields(), privacyNotice: "填寫資料僅供本活動報名、聯繫與執行使用，由總召以上權限人員管理。",
+      owner: activity?.owner || userName, proxy: activity?.proxy || "",
       createdAt: now, updatedAt: now,
     };
     setEditor(next); setFields(next.fields); setFeedback("");
@@ -83,6 +88,8 @@ export default function RegistrationPanel({ data, busy, onSave, preview, initial
       description: String(formData.get("description") ?? "").trim(),
       privacyNotice: String(formData.get("privacyNotice") ?? "").trim(),
       status: String(formData.get("status") ?? "draft") as RegistrationForm["status"],
+      owner: String(formData.get("owner") ?? "").trim(),
+      proxy: String(formData.get("proxy") ?? "").trim(),
       fields: fields.map((row) => ({ ...row, label: row.label.trim(), options: (row.options ?? []).map((value) => value.trim()).filter(Boolean) })),
       updatedAt: new Date().toISOString(),
     };
@@ -158,23 +165,24 @@ export default function RegistrationPanel({ data, busy, onSave, preview, initial
   };
 
   return <section className="registration-center" aria-labelledby="registration-title">
-    <div className="page-heading"><div><h2 id="registration-title">活動報名中心</h2><p className="muted">每個活動使用自己的表單與名單；個資只提供總召以上權限查看。</p></div><button className="primary" disabled={!activityId || activityForms.length > 0} onClick={() => openEditor()}>＋ 建立報名表</button></div>
+    <div className="page-heading"><div><h2 id="registration-title">活動報名中心</h2><p className="muted">每個活動使用自己的表單與名單；個資只提供總召以上權限查看。</p></div>{canEditForm && <button className="primary" disabled={!activityId || activityForms.length > 0} onClick={() => openEditor()}>＋ 建立報名表</button>}</div>
     {preview && <div className="registration-note">公開版會把表單與測試填答保留在這台裝置。跨裝置收件與自動寄信需正式後端服務。</div>}
-    <div className="registration-toolbar"><label>選擇活動<select value={activityId} onChange={(event) => { setActivityId(event.target.value); setSelectedId(""); setReveal(false); if (!preview && event.target.value) setLoading(true); }}><option value="">請選擇活動</option>{data.activities.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label><span className="badge">個資權限：總召以上</span></div>
+    <div className="registration-toolbar"><label>選擇活動<select value={activityId} onChange={(event) => { setActivityId(event.target.value); setSelectedId(""); setReveal(false); if (!preview && event.target.value) setLoading(true); }}><option value="">請選擇活動</option>{accessibleActivities.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label><span className="badge">個資權限：總召以上</span></div>
     {loading ? <div className="empty">正在載入報名表…</div> : !activity ? <div className="empty">請先建立或選擇一場活動。</div> : <div className="registration-layout">
       <aside className="registration-form-list"><div className="registration-section-head"><div><h3>{activity.name}</h3><small>{activityForms.length} 份表單</small></div></div>{activityForms.map((form) => <button className={selected?.id === form.id ? "active" : ""} key={form.id} onClick={() => { setSelectedId(form.id); setReveal(false); setFeedback(""); }}><span><b>{form.title}</b><small>{form.status === "open" ? "開放報名" : form.status === "closed" ? "已截止" : "草稿"}</small></span><strong>{submissions.filter((row) => row.formId === form.id).length}</strong></button>)}{!activityForms.length && <p className="muted">這場活動還沒有報名表。</p>}</aside>
       <div className="registration-main">{selected ? <>
-        <div className="registration-card-head"><div><span className={`badge ${selected.status === "open" ? "green" : ""}`}>{selected.status === "open" ? "開放報名" : selected.status === "closed" ? "已截止" : "草稿"}</span><h3>{selected.title}</h3><p className="muted">{selected.description || "尚未加入表單說明"}</p></div><div className="page-actions"><button onClick={() => openEditor(selected)}>編輯問題</button><button disabled={selected.status !== "open"} onClick={copyLink}>複製報名連結</button><a className="button" aria-disabled={selected.status !== "open"} href={selected.status === "open" ? publicUrl : undefined} target="_blank" rel="noreferrer">預覽填寫</a></div></div>
+        <div className="registration-card-head"><div><span className={`badge ${selected.status === "open" ? "green" : ""}`}>{selected.status === "open" ? "開放報名" : selected.status === "closed" ? "已截止" : "草稿"}</span><h3>{selected.title}</h3><p className="muted">{selected.description || "尚未加入表單說明"}</p><p className="muted">負責 {selected.owner || "未指派"} · 代理 {selected.proxy || "未指派"}</p></div><div className="page-actions">{canEditForm && <button onClick={() => openEditor(selected)}>編輯問題</button>}<button disabled={selected.status !== "open"} onClick={copyLink}>複製報名連結</button><a className="button" aria-disabled={selected.status !== "open"} href={selected.status === "open" ? publicUrl : undefined} target="_blank" rel="noreferrer">預覽填寫</a></div></div>
         <p className="registration-privacy">🔒 {selected.privacyNotice}</p>
         <div className="registration-metrics"><div><small>問題</small><strong>{selected.fields.length}</strong></div><div><small>報名筆數</small><strong>{selectedSubmissions.length}</strong></div><div><small>個資欄位</small><strong>{selected.fields.filter((row) => row.sensitive).length}</strong></div></div>
         <section className="registration-reminders" aria-label="活動提醒"><div><h3>參加者提醒</h3><p>依活動日期自動排定前 5 天與前 1 天提醒，共 {reminderRows.length} 位有電子郵件。</p></div><div className="registration-reminder-grid"><article><small>活動前 5 天</small><strong>{reminderSchedule.five_days || "未設定活動日"}</strong><button disabled={!reminderRows.length || !reminderSchedule.five_days} onClick={() => void prepareReminder("five_days")}>準備通知內容</button></article><article><small>活動前 1 天</small><strong>{reminderSchedule.one_day || "未設定活動日"}</strong><button disabled={!reminderRows.length || !reminderSchedule.one_day} onClick={() => void prepareReminder("one_day")}>準備通知內容</button></article></div></section>
-        <div className="registration-submission-head"><div><h3>報名名單</h3><small>預設遮蔽個資；顯示與匯出僅限總召以上。已有填答後會鎖定問題結構，保留歷史資料欄位。</small></div><div className="page-actions"><button disabled={!selectedSubmissions.length} onClick={() => setReveal(!reveal)}>{reveal ? "遮蔽個資" : "顯示個資"}</button><button onClick={() => void exportResponses()}>匯出 Excel</button></div></div>
-        {selectedSubmissions.length ? <div className="registration-table-scroll"><table><thead><tr><th>提交時間</th><th>對帳</th><th>對帳註記</th>{selected.fields.map((field) => <th key={field.id}>{field.label}{field.sensitive ? " 🔒" : ""}</th>)}</tr></thead><tbody>{selectedSubmissions.map((submission) => <tr key={submission.id}><td>{new Date(submission.submittedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })}</td><td><select className="registration-payment-select" disabled={reconciliationBusy === submission.id} value={submission.paymentStatus ?? "unpaid"} onChange={(event) => void updateReconciliation(submission, { paymentStatus:event.target.value as RegistrationPaymentStatus })}>{Object.entries(paymentLabels).map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></td><td><input className="registration-payment-note" aria-label={`${submission.id} 對帳註記`} disabled={reconciliationBusy === submission.id} defaultValue={submission.paymentNote ?? ""} placeholder="匯款末五碼／備註" maxLength={1000} onBlur={(event) => { if (event.target.value !== (submission.paymentNote ?? "")) void updateReconciliation(submission, { paymentNote:event.target.value }); }} /></td>{selected.fields.map((field) => { const raw = submission.answers[field.id]; const value = Array.isArray(raw) ? raw.join("、") : String(raw ?? ""); return <td key={field.id}>{field.sensitive && !reveal ? mask(value) : value || "—"}</td>; })}</tr>)}</tbody></table></div> : <div className="empty">尚無報名資料。表單開放後，可複製專屬連結給參加者。</div>}
+        <div className="registration-submission-head"><div><h3>報名名單</h3><small>預設遮蔽個資；顯示與匯出僅限總召以上。已有填答後會鎖定問題結構，保留歷史資料欄位。</small></div><div className="page-actions">{canSeePrivate && <><button disabled={!selectedSubmissions.length} onClick={() => setReveal(!reveal)}>{reveal ? "遮蔽個資" : "顯示個資"}</button><button onClick={() => void exportResponses()}>匯出 Excel</button></>}</div></div>
+        {selectedSubmissions.length ? <div className="registration-table-scroll"><table><thead><tr><th>提交時間</th><th>對帳</th><th>對帳註記</th>{selected.fields.map((field) => <th key={field.id}>{field.label}{field.sensitive ? " 🔒" : ""}</th>)}</tr></thead><tbody>{selectedSubmissions.map((submission) => <tr key={submission.id}><td>{new Date(submission.submittedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })}</td><td><select className="registration-payment-select" disabled={reconciliationBusy === submission.id || !canEditForm} value={submission.paymentStatus ?? "unpaid"} onChange={(event) => void updateReconciliation(submission, { paymentStatus:event.target.value as RegistrationPaymentStatus })}>{Object.entries(paymentLabels).map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></td><td><input className="registration-payment-note" aria-label={`${submission.id} 對帳註記`} disabled={reconciliationBusy === submission.id || !canEditForm} defaultValue={submission.paymentNote ?? ""} placeholder="匯款末五碼／備註" maxLength={1000} onBlur={(event) => { if (event.target.value !== (submission.paymentNote ?? "")) void updateReconciliation(submission, { paymentNote:event.target.value }); }} /></td>{selected.fields.map((field) => { const raw = submission.answers[field.id]; const value = Array.isArray(raw) ? raw.join("、") : String(raw ?? ""); return <td key={field.id}>{field.sensitive && !reveal ? mask(value) : value || "—"}</td>; })}</tr>)}</tbody></table></div> : <div className="empty">尚無報名資料。表單開放後，可複製專屬連結給參加者。</div>}
       </> : <div className="empty">建立第一份表單後，可設定問題、分享連結與匯出名單。</div>}</div>
     </div>}
     {feedback && <p className="registration-feedback" role="status">{feedback}</p>}
     {editor && <dialog open className="modal registration-editor" aria-labelledby="registration-editor-title"><form onSubmit={saveForm}><div className="modal-head"><h2 id="registration-editor-title">{forms.some((row) => row.id === editor.id) ? "編輯報名表" : "建立報名表"}</h2><button type="button" aria-label="關閉" onClick={() => setEditor(null)}>×</button></div><fieldset disabled={saving || busy}>
       <label>表單名稱<input name="title" required maxLength={200} defaultValue={editor.title} /></label><label>狀態<select name="status" defaultValue={editor.status}><option value="draft">草稿</option><option value="open">開放報名</option><option value="closed">已截止</option></select></label><label>表單說明<textarea name="description" maxLength={3000} defaultValue={editor.description} /></label><label>個資告知<textarea name="privacyNotice" required maxLength={2000} defaultValue={editor.privacyNotice} /></label>
+      <label>表單負責人<MemberSelect name="owner" members={memberOptions} defaultValue={editor.owner || activity?.owner || userName} required /></label><label>職務代理<MemberSelect name="proxy" members={memberOptions} defaultValue={editor.proxy} /></label>
       <div className="registration-question-head"><div><h3>自訂問題</h3><small>每題可選回答方式並直接確認填寫畫面。</small></div><button type="button" disabled={selectedSubmissions.length > 0} onClick={() => setFields((rows) => [...rows, { id: uid(), label: "", type: "short_text", required: false, sensitive: false }])}>＋ 新增問題</button></div>
       <RegistrationBuilder fields={fields} setFields={setFields} locked={selectedSubmissions.length > 0} busy={saving || busy} />
     </fieldset><div className="mgmt-dialog-actions"><button type="button" disabled={saving || busy} onClick={() => setEditor(null)}>取消</button><button className="primary" disabled={saving || busy}>{saving || busy ? "儲存中…" : "儲存報名表"}</button></div></form></dialog>}

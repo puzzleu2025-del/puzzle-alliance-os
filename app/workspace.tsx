@@ -3,10 +3,11 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { CalendarPanel, type CalendarEntry } from "./calendar-panel";
 import SettingsPanel, { Audit } from "./settings-panel";
-import { ActivitiesPanel, MeetingsPanel, RolesPanel, TasksPanel, phaseSchedule, type Meeting, type Notice, type State, type Task } from "./management-panels";
+import { ActivitiesPanel, MeetingsPanel, RolesPanel, TasksPanel, activityPhaseSchedule, phaseSchedule, type Meeting, type Notice, type State, type Task } from "./management-panels";
 import RegistrationPanel from "./registration-panel";
 import RegistrationPublic from "./registration-public";
 import MembersPanel, { type MemberRole } from "./members-panel";
+import type { MemberOption } from "./member-select";
 
 type User = { id: string; email: string; name: string; role?: string };
 export type { State } from "./management-panels";
@@ -27,6 +28,7 @@ export default function Workspace({ user, preview = false, initialState = emptyS
   const [data, setData] = useState<State>(initialState);
   const [version, setVersion] = useState(0);
   const [audit, setAudit] = useState<Audit[]>([]);
+  const [memberOptions, setMemberOptions] = useState<MemberOption[]>(() => preview ? [{ id: user.id, name: user.name, username: user.email.split("@")[0] || user.id, role: user.role || "member" }] : []);
   const [sync, setSync] = useState(preview ? "本機資料" : "載入中");
   const [ready, setReady] = useState(preview);
   const [busy, setBusy] = useState(false);
@@ -36,7 +38,7 @@ export default function Workspace({ user, preview = false, initialState = emptyS
   const [error, setError] = useState("");
   const [publicFormId] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("register") ?? "");
   const [registrationActivityId, setRegistrationActivityId] = useState("");
-  const visibleNav = nav.filter(([id]) => (id !== "members" || ["admin", "manager", "coordinator"].includes(user.role ?? "")) && (id !== "registrations" || ["admin", "manager", "coordinator"].includes(user.role ?? "")));
+  const visibleNav = nav.filter(([id]) => (id !== "members" || ["admin", "manager", "coordinator"].includes(user.role ?? "")) && (id !== "registrations" || ["admin", "manager", "coordinator", "trainee_coordinator"].includes(user.role ?? "")));
 
   useEffect(() => {
     if (!preview) return;
@@ -67,9 +69,9 @@ export default function Workspace({ user, preview = false, initialState = emptyS
     try {
       const res = await fetch("/api/workspace", { cache: "no-store" });
       if (!res.ok) throw new Error(res.status === 403 ? "這個帳號尚未取得使用權限" : "無法載入工作空間");
-      const body = await res.json() as {state:State;version:number;audit:Audit[]};
+      const body = await res.json() as {state:State;version:number;audit:Audit[];memberOptions?:MemberOption[]};
       if (requestGeneration !== generation.current) return;
-      setData(body.state ?? emptyState); setVersion(body.version ?? 0); setAudit(body.audit ?? []); setSync("已同步");
+      setData(body.state ?? emptyState); setVersion(body.version ?? 0); setAudit(body.audit ?? []); setMemberOptions(body.memberOptions ?? []); setSync("已同步");
       setError(""); setReady(true);
     } catch (e) { if (requestGeneration !== generation.current) return; setError(e instanceof Error ? e.message : "載入失敗"); setSync("同步失敗"); }
   }, [preview]);
@@ -138,14 +140,18 @@ export default function Workspace({ user, preview = false, initialState = emptyS
     };
     const change:Notice={...notice(`排程異動：${event.title}`),detail:`${event.date}${meeting?" "+meeting.time.slice(11,16):""} → ${date}${meeting?" "+(time||meeting.time.slice(11,16)):""}；請確認相關準備與出席安排。`,important:true};
     const activity = event.kind === "activity" ? data.activities.find((row) => row.id === event.id) : undefined;
-    const shiftedActivityDate = activity ? shiftDate(activity.date) ?? activity.date : "";
-    return save({...data,activities:data.activities.map(a=>event.kind==="activity"&&a.id===event.id?{...a,date:shiftedActivityDate,startDate:shiftDate(a.startDate),endDate:shiftDate(a.endDate)}:a),tasks:data.tasks.map(t=>{
-      if (event.kind === "task" && t.id === event.id) return {...t,startDate:shiftDate(t.startDate),due:date};
+    const shiftedActivityDate = activity ? date : "";
+    const shiftedActivity = activity ? { ...activity, date: shiftedActivityDate,
+      startDate: activity.startDate === phaseSchedule(activity.date, "P1")?.startDate ? phaseSchedule(shiftedActivityDate, "P1")?.startDate : activity.startDate,
+      endDate: activity.endDate === phaseSchedule(activity.date, "P9")?.due ? phaseSchedule(shiftedActivityDate, "P9")?.due : activity.endDate,
+    } : undefined;
+    return save({...data,activities:data.activities.map(a=>event.kind==="activity"&&a.id===event.id?shiftedActivity!:a),tasks:data.tasks.map(t=>{
+      if (event.kind === "task" && t.id === event.id) return {...t,startDate:shiftDate(t.startDate),due:date,manualStartDate:true,manualDue:true};
       if (!activity || t.activityId !== activity.id || !t.phaseId) return t;
-      const before = phaseSchedule(activity.date, t.phaseId);
-      const after = phaseSchedule(shiftedActivityDate, t.phaseId);
+      const before = activityPhaseSchedule(activity, t.phaseId);
+      const after = activityPhaseSchedule(shiftedActivity, t.phaseId);
       if (!before || !after) return t;
-      return {...t,startDate:t.startDate === before.startDate ? after.startDate : t.startDate,due:t.due === before.due ? after.due : t.due};
+      return {...t,startDate:!t.manualStartDate && t.startDate === before.startDate ? after.startDate : t.startDate,due:!t.manualDue && t.due === before.due ? after.due : t.due};
     }),meetings:data.meetings.map(m=>event.kind==="meeting"&&m.id===event.id?shiftMeeting(m):m),notices:[change,...data.notices]},"reschedule");
   };
 
@@ -164,13 +170,13 @@ export default function Workspace({ user, preview = false, initialState = emptyS
         {preview && <div className="preview-banner" role="note">GitHub Pages 互動版 · 帳號、成員與報名資料保存在這個瀏覽器；正式跨裝置同步與自動寄信需要後端服務。</div>}
         {!ready ? (error ? <div className="empty">目前無法開啟工作空間，請重新載入或確認登入帳號。</div> : <Loading />) : <>
           {page === "dashboard" && <Dashboard data={data} openTasks={openTasks} upcoming={upcoming} activityName={activityName} onNewTask={() => setPage("tasks")} />}
-          {page === "activities" && <ActivitiesPanel data={data} userName={user.name} busy={busy} onSave={save} onOpenRegistrations={(activityId) => { setRegistrationActivityId(activityId); setPage("registrations"); }} />}
-          {page === "tasks" && <TasksPanel data={data} userName={user.name} busy={busy} onSave={save} />}
-          {page === "registrations" && <RegistrationPanel data={data} userName={user.name} busy={busy} onSave={save} preview={preview} initialActivityId={registrationActivityId || undefined} />}
-          {page === "calendar" && <CalendarPanel data={data} userName={user.name} userRole={user.role} busy={busy} onSave={save} onReschedule={reschedule} />}
-          {page === "meetings" && <MeetingsPanel data={data} userName={user.name} busy={busy} onSave={save} />}
+          {page === "activities" && <ActivitiesPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} onOpenRegistrations={(activityId) => { setRegistrationActivityId(activityId); setPage("registrations"); }} />}
+          {page === "tasks" && <TasksPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} />}
+          {page === "registrations" && <RegistrationPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} preview={preview} initialActivityId={registrationActivityId || undefined} />}
+          {page === "calendar" && <CalendarPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} onReschedule={reschedule} />}
+          {page === "meetings" && <MeetingsPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} />}
           {page === "roles" && <RolesPanel data={data} userName={user.name} busy={busy} onSave={save} />}
-          {page === "members" && <MembersPanel currentUser={{ ...user, role: (user.role ?? "member") as MemberRole }} preview={preview} />}
+          {page === "members" && <MembersPanel currentUser={{ ...user, role: (user.role ?? "member") as MemberRole }} preview={preview} onChanged={() => void load()} />}
           {page === "notifications" && <Notifications data={data} navigate={setPage} acknowledge={id=>void save({...data,notices:data.notices.map(n=>n.id===id?{...n,read:true}:n)},"read_notice")} />}
           {page === "settings" && <SettingsPanel version={version} preview={preview} sync={sync} audit={audit} refresh={()=>void load()} onLogout={onLogout} />}
         </>}
@@ -192,7 +198,7 @@ function Notifications({data,navigate,acknowledge}:{data:State;navigate:(page:Pa
   return <><div className="page-heading"><div><h2>通知中心</h2><p className="muted">只顯示需要處理、可能延誤、待審核與重要變更。</p></div></div><section className="card notification-list">{[...rows,...meetings].map(n=><article className={`notification-item ${n.risk?"risk":"warn"}`} key={n.id}><div><h3>{n.title}</h3><p>{n.detail}</p></div><button onClick={()=>navigate(n.page)}>前往處理</button></article>)}{changes.map(n=><article className="notification-item info" key={n.id}><div><h3>{n.title}</h3><p>{n.detail}</p><small>{formatDateTime(n.createdAt)}</small></div><button onClick={()=>acknowledge(n.id)}>我已確認</button></article>)}{!rows.length&&!meetings.length&&!changes.length&&<p>目前沒有需要處理的通知。</p>}</section></>;
 }
 function formatDateTime(value: string) { if (!value) return "未設定"; return new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium", timeStyle: value.includes("T") ? "short" : undefined, timeZone: "Asia/Taipei" }).format(new Date(value.includes("T") ? value : `${value}T00:00:00+08:00`)); }
-function roleName(role?: string) { return ({admin:"系統管理員",manager:"一般管理員",coordinator:"總召",leader:"幹部／組長",member:"一般成員"} as Record<string,string>)[role || ""] || "已核可成員"; }
+function roleName(role?: string) { return ({admin:"系統管理員",manager:"一般管理員",coordinator:"總召",trainee_coordinator:"見習總召",leader:"幹部／組長",member:"一般成員"} as Record<string,string>)[role || ""] || "已核可成員"; }
 function Loading() { return <div className="loading"><i/><i/><i/></div>; }
 function Dashboard({data,openTasks,upcoming,activityName,onNewTask}:{data:State;openTasks:Task[];upcoming:Meeting[];activityName:(id:string)=>string;onNewTask:()=>void}) { const risks = openTasks.filter(t => t.due && new Date(t.due) < new Date()); return <><div className="hero"><div><p className="eyebrow">WORKSPACE OVERVIEW</p><h2>一起，把事情推進。</h2><p className="muted">掌握活動進度，讓每一次交接都有方向。</p></div><button className="primary" onClick={onNewTask}>＋ 建立任務</button></div><div className="stats">{[["進行中的活動",data.activities.length],["待處理任務",openTasks.length],["已逾期",risks.length],["近期會議",upcoming.length]].map(([l,v]) => <section className="stat" key={l}><span>{l}</span><strong>{v}</strong></section>)}</div><div className="split"><section className="panel"><div className="panel-head"><h3>待處理任務</h3><button onClick={onNewTask}>新增</button></div>{openTasks.length ? openTasks.slice(0,5).map(t => <div className="row" key={t.id}><div><b>{t.name}</b><small>{activityName(t.activityId)}</small></div><span>{t.due || "未設期限"}</span></div>) : <p className="empty-inline">目前沒有待處理任務</p>}</section><section className="panel"><h3>近期會議</h3>{upcoming.length ? upcoming.slice(0,5).map(m => <div className="row" key={m.id}><div><b>{m.title}</b><small>{activityName(m.activityId)}</small></div><span>{formatDateTime(m.time)}</span></div>) : <p className="empty-inline">目前沒有已安排會議</p>}</section></div></>; }
 function DialogShell({ title, close, className = "", children }: {title: string; close:()=>void; className?:string; children:ReactNode}) {

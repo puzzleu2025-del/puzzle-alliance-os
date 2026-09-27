@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { phaseSchedule, type
+import { activityPhaseSchedule, canConfigureActivity, phaseSchedule, type
   Activity,
   ManagementPanelProps,
   Meeting,
@@ -9,6 +9,7 @@ import { phaseSchedule, type
   Task,
 } from "./management-panels";
 import "./calendar-panel.css";
+import MemberSelect, { MemberMultiSelect, type MemberOption } from "./member-select";
 
 type EntryKind = "activity" | "task" | "meeting";
 type Composer = EntryKind | null;
@@ -59,12 +60,7 @@ function timeLabel(value?: string) {
 }
 
 function activityOccursOn(activity: Activity, date: string) {
-  const start = datePart(activity.startDate || activity.date);
-  const end = datePart(activity.endDate || activity.date || start);
-  if (!start && !end) return false;
-  const lower = start || end;
-  const upper = end || start;
-  return date >= lower && date <= upper;
+  return datePart(activity.date || activity.startDate) === date;
 }
 
 function validateOrder(
@@ -88,26 +84,29 @@ function validateOrder(
 function ActivityForm({
   date,
   userName,
+  members,
   disabled,
   onSubmit,
 }: {
   date: string;
   userName: string;
+  members: MemberOption[];
   disabled: boolean;
   onSubmit: (form: HTMLFormElement) => void;
 }) {
   return (
     <form className="calendar-quick-form" onSubmit={(event) => {
       event.preventDefault();
-      if (validateOrder(event.currentTarget, "startDate", "endDate", "結束日期不能早於開始日期")) {
+      if (validateOrder(event.currentTarget, "startDate", "endDate", "籌備結束不能早於開始")) {
         onSubmit(event.currentTarget);
       }
     }}>
       <fieldset disabled={disabled}>
         <label className="calendar-field-wide">活動名稱<input name="name" required maxLength={200} autoFocus /></label>
-        <label>開始日期<input name="startDate" type="date" required defaultValue={date} /></label>
-        <label>結束日期<input name="endDate" type="date" required defaultValue={date} /></label>
-        <label>活動總召<input name="owner" required maxLength={100} defaultValue={userName} /></label>
+        <label className="calendar-field-wide">活動舉辦日<input name="eventDate" type="date" required defaultValue={date} onChange={(event) => { const form = event.currentTarget.form!; const start = form.elements.namedItem("startDate") as HTMLInputElement; const end = form.elements.namedItem("endDate") as HTMLInputElement; const previous = event.currentTarget.dataset.previousDate || date; const priorStart = phaseSchedule(previous, "P1")?.startDate; const priorEnd = phaseSchedule(previous, "P9")?.due; if (!start.value || start.value === priorStart) start.value = phaseSchedule(event.currentTarget.value, "P1")?.startDate || ""; if (!end.value || end.value === priorEnd) end.value = phaseSchedule(event.currentTarget.value, "P9")?.due || ""; event.currentTarget.dataset.previousDate = event.currentTarget.value; }} /></label>
+        <label>籌備開始<input name="startDate" type="date" required defaultValue={phaseSchedule(date, "P1")?.startDate} /></label>
+        <label>籌備結束<input name="endDate" type="date" required defaultValue={phaseSchedule(date, "P9")?.due} /></label>
+        <label>活動總召<MemberSelect name="owner" members={members} defaultValue={userName} required /></label>
         <label>狀態<select name="status" defaultValue="規劃中"><option>規劃中</option><option>籌備中</option><option>進行中</option><option>已完成</option></select></label>
         <label className="calendar-field-wide">地點<input name="location" maxLength={200} /></label>
       </fieldset>
@@ -120,19 +119,21 @@ function TaskForm({
   data,
   date,
   userName,
+  members,
   disabled,
   onSubmit,
 }: {
   data: State;
   date: string;
   userName: string;
+  members: MemberOption[];
   disabled: boolean;
   onSubmit: (form: HTMLFormElement) => void;
 }) {
   const applyActivitySchedule = (form: HTMLFormElement) => {
     const values = new FormData(form);
     const activity = data.activities.find((row) => row.id === field(values, "activityId"));
-    const schedule = phaseSchedule(activity?.date ?? "", field(values, "phaseId"));
+    const schedule = activityPhaseSchedule(activity, field(values, "phaseId"));
     if (!schedule) return;
     (form.elements.namedItem("startDate") as HTMLInputElement).value = schedule.startDate;
     (form.elements.namedItem("due") as HTMLInputElement).value = schedule.due;
@@ -155,7 +156,7 @@ function TaskForm({
         <label className="calendar-field-wide">任務名稱<input name="name" required maxLength={200} autoFocus /></label>
         <label>開始日期<input name="startDate" type="date" required defaultValue={date} /></label>
         <label>期限<input name="due" type="date" required defaultValue={date} /></label>
-        <label>任務主責<input name="assignee" required maxLength={100} defaultValue={userName} /></label>
+        <label>任務主責<MemberSelect name="assignee" members={members} defaultValue={userName} required /></label>
         <label>優先級<select name="priority" defaultValue="一般"><option>緊急</option><option>高</option><option>一般</option><option>低</option></select></label>
         <label className="calendar-field-wide">所屬活動<select name="activityId" defaultValue="" onChange={(event) => applyActivitySchedule(event.currentTarget.form!)}><option value="">未分類</option>{data.activities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
         <label className="calendar-field-wide">籌備階段<select name="phaseId" defaultValue="" onChange={(event) => { event.currentTarget.setCustomValidity(""); applyActivitySchedule(event.currentTarget.form!); }}><option value="">請選擇階段</option>{phaseChoices.map((phase) => <option key={phase} value={phase}>{phase}</option>)}</select><small>選擇活動與階段後，依活動日倒推日期；仍可手動調整。</small></label>
@@ -169,12 +170,14 @@ function MeetingForm({
   data,
   date,
   userName,
+  members,
   disabled,
   onSubmit,
 }: {
   data: State;
   date: string;
   userName: string;
+  members: MemberOption[];
   disabled: boolean;
   onSubmit: (form: HTMLFormElement) => void;
 }) {
@@ -189,16 +192,17 @@ function MeetingForm({
         <label className="calendar-field-wide">會議名稱<input name="title" required maxLength={200} autoFocus /></label>
         <label>開始時間<input name="time" type="datetime-local" required defaultValue={`${date}T09:00`} /></label>
         <label>結束時間<input name="endTime" type="datetime-local" required defaultValue={`${date}T10:00`} /></label>
-        <label>主持人<input name="organizer" required maxLength={100} defaultValue={userName} /></label>
-        <label>記錄人<input name="recorder" required maxLength={100} /></label>
+        <label>主持人<MemberSelect name="organizer" members={members} defaultValue={userName} required /></label>
+        <label>記錄人<MemberSelect name="recorder" members={members} required /></label>
         <label className="calendar-field-wide">所屬活動<select name="activityId" defaultValue={data.activities[0]?.id ?? ""}><option value="">未分類</option>{data.activities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
+        <label className="calendar-field-wide">出席者<MemberMultiSelect name="attendees" members={members} /><small>選擇後，各人可自行回覆出席。</small></label>
       </fieldset>
       <button className="primary calendar-save" type="submit" disabled={disabled}>{disabled ? "儲存中…" : "建立會議"}</button>
     </form>
   );
 }
 
-export function CalendarPanel({ data, userName, userRole, busy, onSave, onReschedule }: CalendarPanelProps) {
+export function CalendarPanel({ data, userId, userName, userRole, memberOptions = [], busy, onSave, onReschedule }: CalendarPanelProps) {
   const now = new Date();
   const today = keyOf(now);
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
@@ -212,13 +216,43 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
   const [dragOverDate, setDragOverDate] = useState("");
   const [taskView, setTaskView] = useState("self");
   const draggedEntry = useRef<CalendarEntry | null>(null);
-  const canSeeAllTasks = ["admin", "manager", "coordinator"].includes(userRole ?? "");
-  const taskOwners = useMemo(() => Array.from(new Set(data.tasks.map((task) => task.assignee.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-TW")), [data.tasks]);
-  const visibleTasks = data.tasks.filter((task) => {
-    if (canSeeAllTasks && taskView === "all") return true;
-    return task.assignee.trim() === (canSeeAllTasks && taskView !== "self" ? taskView : userName.trim());
-  });
-  const canMoveEntry = (entry: CalendarEntry) => Boolean(onReschedule) && (canSeeAllTasks || entry.kind === "task");
+  const canSeeAllTasks = ["admin", "manager", "coordinator", "trainee_coordinator"].includes(userRole ?? "");
+  const canManageAll = ["admin", "manager"].includes(userRole ?? "");
+  const authorizedActivityIds = new Set(data.activities.filter((activity) =>
+    canManageAll || (userRole === "coordinator" && (
+      activity.coordinatorIds?.includes(userId ?? "") ||
+      (activity.coordinatorIds === undefined && !activity.traineeCoordinatorId && [activity.owner, activity.proxy].some((name) => name?.trim() === userName.trim()))
+    )) || (userRole === "trainee_coordinator" && activity.traineeCoordinatorId === userId),
+  ).map((activity) => activity.id));
+  const scopedActivities = data.activities.filter((activity) => authorizedActivityIds.has(activity.id));
+  const scopedTasks = data.tasks.filter((task) => authorizedActivityIds.has(task.activityId));
+  const scopedMeetings = data.meetings.filter((meeting) => authorizedActivityIds.has(meeting.activityId));
+  const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userName, userRole));
+  const configurableData = { ...data, activities: configurableActivities };
+  const calendarPeople = useMemo(() => Array.from(new Set([
+    ...scopedActivities.flatMap((row) => [row.owner, row.proxy]),
+    ...scopedTasks.flatMap((row) => [row.assignee, row.proxy, ...(row.collaborators ?? [])]),
+    ...scopedMeetings.flatMap((row) => [row.organizer, row.recorder, ...(row.attendees ?? []), ...(row.attendeeResponses ?? []).map((person) => person.name)]),
+  ].map((person) => person?.trim() ?? "").filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-TW")), [scopedActivities, scopedTasks, scopedMeetings]);
+  const selectedPerson = canSeeAllTasks && taskView !== "self" && taskView !== "all" ? taskView : userName.trim();
+  const showAll = canSeeAllTasks && taskView === "all";
+  const visibleActivities = data.activities.filter((activity) => (taskView === "self" || canManageAll || authorizedActivityIds.has(activity.id)) && (showAll || [activity.owner, activity.proxy].some((name) => name?.trim() === selectedPerson)));
+  const visibleTasks = data.tasks.filter((task) => (taskView === "self" || canManageAll || authorizedActivityIds.has(task.activityId)) && (showAll || [task.assignee, task.proxy, ...(task.collaborators ?? [])].some((name) => name?.trim() === selectedPerson)));
+  const visibleMeetings = data.meetings.filter((meeting) => (taskView === "self" || canManageAll || authorizedActivityIds.has(meeting.activityId)) && (showAll || [meeting.organizer, meeting.recorder, ...(meeting.attendees ?? []), ...(meeting.attendeeResponses ?? []).map((person) => person.name)].some((name) => name?.trim() === selectedPerson)));
+  const canMoveEntry = (entry: CalendarEntry) => {
+    if (!onReschedule) return false;
+    if (canManageAll) return true;
+    if (entry.kind === "activity") {
+      const activity = data.activities.find((row) => row.id === entry.id);
+      return canConfigureActivity(activity, userId, userName, userRole);
+    }
+    if (entry.kind === "task") {
+      const task = data.tasks.find((row) => row.id === entry.id);
+      return Boolean(task && canConfigureActivity(data.activities.find((activity) => activity.id === task.activityId), userId, userName, userRole));
+    }
+    const meeting = data.meetings.find((row) => row.id === entry.id);
+    return Boolean(meeting && canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userName, userRole));
+  };
 
   const cells = useMemo(() => {
     const year = cursor.getFullYear();
@@ -232,9 +266,9 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
   }, [cursor]);
 
   const entriesFor = (date: string) => ({
-    activities: data.activities.filter((activity) => activityOccursOn(activity, date)),
+    activities: visibleActivities.filter((activity) => activityOccursOn(activity, date)),
     tasks: visibleTasks.filter((task) => datePart(task.due || task.startDate) === date),
-    meetings: data.meetings.filter((meeting) => datePart(meeting.time) === date),
+    meetings: visibleMeetings.filter((meeting) => datePart(meeting.time) === date),
   });
   const selected = entriesFor(selectedDate);
   const saving = busy || submitting;
@@ -264,7 +298,7 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
       const item: Activity = {
         id: crypto.randomUUID(),
         name: field(form, "name"),
-        date: startDate,
+        date: field(form, "eventDate"),
         owner: field(form, "owner") || userName,
         status: field(form, "status") || "規劃中",
         description: "",
@@ -276,6 +310,8 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
       action = "create_activity";
     } else if (kind === "task") {
       const assignee = field(form, "assignee") || userName;
+      const activity = data.activities.find((row) => row.id === field(form, "activityId"));
+      const schedule = activityPhaseSchedule(activity, field(form, "phaseId"));
       const item: Task = {
         id: crypto.randomUUID(),
         name: field(form, "name"),
@@ -285,6 +321,8 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
         status: "待處理",
         blocker: "",
         startDate: field(form, "startDate"),
+        manualStartDate: Boolean(schedule && field(form, "startDate") !== schedule.startDate),
+        manualDue: Boolean(schedule && field(form, "due") !== schedule.due),
         priority: field(form, "priority") || "一般",
         phaseId: field(form, "phaseId") || undefined,
         flow: ["建立任務", assignee, "完成"],
@@ -305,11 +343,11 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
         type: "工作會議",
         organizer: field(form, "organizer") || userName,
         recorder: field(form, "recorder"),
-        attendees: [],
-        attendeeResponses: [],
+        attendees: form.getAll("attendees").map(String).filter(Boolean),
+        attendeeResponses: form.getAll("attendees").map(String).filter(Boolean).map((name) => ({ name, response: "待回覆" as const })),
         agenda: "",
         attending: 0,
-        total: 0,
+        total: form.getAll("attendees").length,
       };
       next = { ...data, meetings: [...data.meetings, item] };
       action = "create_meeting";
@@ -382,9 +420,9 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
           <h2 id="calendar-panel-title">行事曆</h2>
           <p className="muted">點選日期即可查看當日內容，並直接建立活動、任務或會議。</p>
         </div>
-        <button className="primary" type="button" onClick={() => { chooseDate(today); setComposer("activity"); }}>＋ 今天新增</button>
+        {canManageAll && <button className="primary" type="button" onClick={() => { chooseDate(today); setComposer("activity"); }}>＋ 今天新增</button>}
       </div>
-      {canSeeAllTasks && <label className="calendar-task-view">任務視角 <select value={taskView} onChange={(event) => setTaskView(event.target.value)}><option value="self">我的任務</option><option value="all">全部任務</option>{taskOwners.filter((owner) => owner !== userName.trim()).map((owner) => <option value={owner} key={owner}>{owner}的任務</option>)}</select></label>}
+      {canSeeAllTasks && <label className="calendar-task-view">行事曆視角 <select value={taskView} onChange={(event) => setTaskView(event.target.value)}><option value="self">我的行程</option><option value="all">全局行程</option>{calendarPeople.filter((person) => person !== userName.trim()).map((person) => <option value={person} key={person}>{person}的行程</option>)}</select></label>}
 
       <div className="calendar-layout">
         <section className="calendar-month-card" aria-label={`${year} 年 ${month + 1} 月`}>
@@ -405,7 +443,7 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
                 const entries = entriesFor(cell.date);
                 const total = entries.activities.length + entries.tasks.length + entries.meetings.length;
                 const calendarEntries: CalendarEntry[] = [
-                  ...entries.activities.map((activity) => ({ id: activity.id, kind: "activity" as const, title: activity.name, date: datePart(activity.startDate || activity.date) })),
+                  ...entries.activities.map((activity) => ({ id: activity.id, kind: "activity" as const, title: activity.name, date: datePart(activity.date || activity.startDate) })),
                   ...entries.tasks.map((task) => ({ id: task.id, kind: "task" as const, title: task.name, date: datePart(task.due || task.startDate) })),
                   ...entries.meetings.map((meeting) => ({ id: meeting.id, kind: "meeting" as const, title: meeting.title, date: datePart(meeting.time), time: meeting.time.slice(11, 16) })),
                 ];
@@ -485,7 +523,7 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
 
           <div className="calendar-create-actions" aria-label="新增項目">
             {(["activity", "task", "meeting"] as EntryKind[]).map((kind) => (
-              <button className={composer === kind ? "active" : ""} type="button" key={kind} onClick={() => { setComposer(composer === kind ? null : kind); setFailed(false); setFeedback(""); }}>＋ {kindLabels[kind]}</button>
+              (kind === "activity" ? canManageAll : configurableActivities.length > 0) && <button className={composer === kind ? "active" : ""} type="button" key={kind} onClick={() => { setComposer(composer === kind ? null : kind); setFailed(false); setFeedback(""); }}>＋ {kindLabels[kind]}</button>
             ))}
           </div>
 
@@ -494,9 +532,9 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
 
           {composer && <div className="calendar-composer" key={`${composer}-${selectedDate}`}>
             <div className="calendar-composer-head"><strong>新增{kindLabels[composer]}</strong><button type="button" aria-label="關閉新增表單" onClick={() => setComposer(null)}>×</button></div>
-            {composer === "activity" && <ActivityForm date={selectedDate} userName={userName} disabled={saving} onSubmit={(form) => void save("activity", form)} />}
-            {composer === "task" && <TaskForm data={data} date={selectedDate} userName={userName} disabled={saving} onSubmit={(form) => void save("task", form)} />}
-            {composer === "meeting" && <MeetingForm data={data} date={selectedDate} userName={userName} disabled={saving} onSubmit={(form) => void save("meeting", form)} />}
+            {composer === "activity" && <ActivityForm date={selectedDate} userName={userName} members={memberOptions} disabled={saving} onSubmit={(form) => void save("activity", form)} />}
+            {composer === "task" && <TaskForm data={configurableData} date={selectedDate} userName={userName} members={memberOptions} disabled={saving} onSubmit={(form) => void save("task", form)} />}
+            {composer === "meeting" && <MeetingForm data={configurableData} date={selectedDate} userName={userName} members={memberOptions} disabled={saving} onSubmit={(form) => void save("meeting", form)} />}
           </div>}
 
           {moving && <div className="calendar-composer" key={`move-${moving.kind}-${moving.id}`}>
@@ -511,9 +549,9 @@ export function CalendarPanel({ data, userName, userRole, busy, onSave, onResche
           </div>}
 
           <div className="calendar-day-entries">
-            {selected.activities.map((activity) => <article className="calendar-entry is-activity" key={`activity-${activity.id}`}><span>活動</span><div><strong>{activity.name}</strong><small>總召 {activity.owner || "未指派"} · {activity.status}</small></div>{canSeeAllTasks && onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: activity.id, kind: "activity", title: activity.name, date: datePart(activity.startDate || activity.date) }); }}>改期</button>}</article>)}
-            {selected.tasks.map((task) => <article className="calendar-entry is-task" key={`task-${task.id}`}><span>任務</span><div><strong>{task.name}</strong><small>{activityName(data, task.activityId)} · 主責 {task.assignee || "未指派"}</small></div>{onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: task.id, kind: "task", title: task.name, date: datePart(task.due) }); }}>改期</button>}</article>)}
-            {selected.meetings.map((meeting) => <article className="calendar-entry is-meeting" key={`meeting-${meeting.id}`}><span>會議</span><div><strong>{meeting.title}</strong><small>{timeLabel(meeting.time)} · 主持 {meeting.organizer || "未指派"}</small></div>{canSeeAllTasks && onReschedule && <button type="button" onClick={() => { setComposer(null); setMoving({ id: meeting.id, kind: "meeting", title: meeting.title, date: datePart(meeting.time), time: meeting.time.slice(11, 16) }); }}>改期</button>}</article>)}
+            {selected.activities.map((activity) => <article className="calendar-entry is-activity" key={`activity-${activity.id}`}><span>活動</span><div><strong>{activity.name}</strong><small>總召 {activity.owner || "未指派"} · {activity.status}</small></div>{canMoveEntry({ id: activity.id, kind: "activity", title: activity.name, date: datePart(activity.date || activity.startDate) }) && <button type="button" onClick={() => { setComposer(null); setMoving({ id: activity.id, kind: "activity", title: activity.name, date: datePart(activity.date || activity.startDate) }); }}>改期</button>}</article>)}
+            {selected.tasks.map((task) => <article className="calendar-entry is-task" key={`task-${task.id}`}><span>任務</span><div><strong>{task.name}</strong><small>{activityName(data, task.activityId)} · 主責 {task.assignee || "未指派"}</small></div>{canMoveEntry({ id: task.id, kind: "task", title: task.name, date: datePart(task.due) }) && <button type="button" onClick={() => { setComposer(null); setMoving({ id: task.id, kind: "task", title: task.name, date: datePart(task.due) }); }}>改期</button>}</article>)}
+            {selected.meetings.map((meeting) => <article className="calendar-entry is-meeting" key={`meeting-${meeting.id}`}><span>會議</span><div><strong>{meeting.title}</strong><small>{timeLabel(meeting.time)} · 主持 {meeting.organizer || "未指派"}</small></div>{canMoveEntry({ id: meeting.id, kind: "meeting", title: meeting.title, date: datePart(meeting.time) }) && <button type="button" onClick={() => { setComposer(null); setMoving({ id: meeting.id, kind: "meeting", title: meeting.title, date: datePart(meeting.time), time: meeting.time.slice(11, 16) }); }}>改期</button>}</article>)}
             {!selected.activities.length && !selected.tasks.length && !selected.meetings.length && !composer && <div className="calendar-empty"><strong>這一天還沒有安排</strong><p>可直接新增活動、任務或會議，日期會自動帶入。</p></div>}
           </div>
         </aside>

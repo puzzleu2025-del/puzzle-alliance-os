@@ -1,0 +1,68 @@
+{
+  "REQUESTED_CHANGE": "系統管理員及一般管理員可由介面修改所有活動業務細節；多場總召與單場見習總召須有活動授權，只能在所屬活動提交設定前編輯，提交後由管理員修改；另完成甘特排程、權責行事曆、本人會議出席、人員下拉、拒絕申請刪除，保留既有資料與無關功能。",
+  "ALLOWED_SCOPE": {
+    ".argo/contracts/puzzle-ops-gantt-calendar-20260927.json": "本次 exact-file 變更契約與驗收證據",
+    "app/management-panels.tsx": "完整編輯活動、任務、會議細項與甘特階段主責、代理；活動授權及提交設定後鎖定總召編輯介面",
+    "app/management-panels.css": "只為新增的每週甘特及編輯控制補必要樣式",
+    "app/calendar-panel.tsx": "按角色和權責顯示行事曆、去除活動整段日期重複項，保留改期確認",
+    "app/calendar-panel.css": "只為行事曆新增的檢視控制補必要樣式",
+    "app/workspace.tsx": "傳遞登入角色及成員選項，活動改期關聯排程，見習總召角色顯示",
+    "app/api/workspace/route.ts": "管理員完整編輯、明確活動授權、見習總召單場限制、提交設定鎖及各角色伺服器端權限驗證",
+    "app/member-select.tsx": "活動、任務、會議與報名表單共用的現有成員下拉選擇元件，保留舊資料顯示",
+    "app/members-panel.tsx": "已拒絕申請可刪除，加入見習總召角色選擇與說明",
+    "app/api/members/route.ts": "已拒絕申請刪除及見習總召角色的階層權限",
+    "app/registration-panel.tsx": "報名表單負責人與代理人下拉選單，總召只能編輯獲授權且未提交的活動表單",
+    "app/registration-types.ts": "報名表單持久化負責人與代理人欄位，舊表單保持相容",
+    "app/api/registration-forms/route.ts": "保存報名表單責任欄位，並以活動授權及提交設定狀態限制總召管理",
+    "tests/feature/ops-gantt-calendar.mjs": "隔離資料驗證編輯權限、每週規劃、人工調整保留與行事曆過濾"
+    ,"scripts/argo/regression.mjs": "更新原有回歸中總召可查看任意活動報名表的過時斷言，驗證新活動授權邊界"
+  },
+  "PROTECTED_SCOPE": ["Login/Auth", "members", "registration", "app/page.tsx", "app/layout.tsx", "global CSS/theme", "DB/schema/migrations", "environment", "deployment", "dependencies/config", "governance", "docs/argo_audit.md"],
+  "EXPECTED_SIDE_EFFECTS": [
+    "既有正式與本機人物、活動、任務及會議資料不自動改寫；沒有 migration",
+    "每週規劃只在活動甘特圖呈現，不自動建立任務或行事曆項目",
+    "活動日期改動時僅原本等於自動推算日期的任務跟著變動；手動日期保留",
+    "活動行事曆只列活動日或開始與結束里程碑，任務只列期限，會議只列開始日"
+    ,"成員下拉只列已啟用成員，既有舊值可顯示且編輯時不會默默清除",
+    "刪除操作只對已拒絕申請有效，並清除其登入憑證／重設請求；其他人物資料保留"
+    ,"活動授權與提交設定狀態只新增於活動 JSON，舊活動不自動改寫；現有總召舊活動暫依原主責作相容判定",
+    "提交設定鎖住總召的活動、階段、任務及會議設定及表單修改，仍允許本人回覆出席與任務執行進度"
+  ],
+  "acceptance": [
+    "一般管理員與系統管理員可編輯活動、任務、會議既有所有主要細項並跨重新整理保存；總召及以下不可越權改其他人的細項",
+    "活動日確定後即顯示每週工作，不需先建立任務；可調整每週進度和日期，保留活動與任務的人工調整",
+    "總召以上可從現有啟用成員設定每個活動階段的主責與職務代理；權限以下不能越權設定，設定後跨裝置持久保存且舊活動相容",
+    "管理員可在介面逐場指定總召或見習總召；總召可被授權多場，見習總召至多一場；總召按提交設定後不可再改該活動細項，管理員仍可修改",
+    "行事曆預設只顯示登入者負責、代理、協作或受邀事項；管理員可切換全局或指定人員，總召及見習總召只能切換獲授權活動內的全局或指定人員",
+    "多日活動不在每一天重複顯示，甘特工作不化成大量行事曆任務；拖拉和表單改期均先確認",
+    "會議受邀者可修改自己的出席回覆；管理員可代改任何受邀者；其他角色不可代改他人；同名帳號的舊式姓名指派不可用於本人任務、出席或舊活動授權以防冒用，須由管理員處理",
+    "活動、任務、會議、報名表單的人員職責由現有啟用成員下拉選擇；舊文字值不遺失",
+    "只有可管理該申請者的較高權限可刪除已拒絕申請；待核可／啟用／停用成員不得刪除",
+    "完整差異、登入登出、RBAC、導覽、相鄰頁、console/network 與桌機/手機回歸；原有資料不覆寫"
+  ],
+  "executor": "ops-executor-agent",
+  "reviewer": "ops-independent-reviewer-agent",
+  "protected_exceptions": {
+    "app/management-panels.tsx": {"user_authorization": "本次使用者明確要求管理員編輯業務細項、總召設定階段主責與代理及提交設定鎖"},
+    "app/management-panels.css": {"user_authorization": "本次甘特與編輯介面需要的局部樣式"},
+    "app/calendar-panel.tsx": {"user_authorization": "本次使用者明確要求權責分類與精簡行事曆"},
+    "app/calendar-panel.css": {"user_authorization": "本次權責檢視控制需要的局部樣式"},
+    "app/workspace.tsx": {"user_authorization": "本次角色傳遞、見習總召角色顯示與活動改期關聯排程所需"},
+    "app/api/workspace/route.ts": {"user_authorization": "本次明確要求多場總召、單場見習總召、提交設定鎖及管理員全面修正權，需 API 層實施"}
+    ,"app/member-select.tsx": {"user_authorization": "本次使用者明確要求人員欄位使用現有成員選單"},
+    "app/members-panel.tsx": {"user_authorization": "本次要求見習總召角色與拒絕申請刪除選項"},
+    "app/api/members/route.ts": {"user_authorization": "本次要求見習總召角色與拒絕申請刪除的 API 權限"},
+    "app/registration-panel.tsx": {"user_authorization": "本次要求報名表單人員責任選單及總召活動權限範圍"},
+    "app/registration-types.ts": {"user_authorization": "本次報名表單負責人及代理人欄位保存需求"},
+    "app/api/registration-forms/route.ts": {"user_authorization": "本次報名表單責任欄位儲存及總召獲授權活動、提交設定鎖權限"},
+    "scripts/argo/regression.mjs": {"user_authorization": "本次明確變更總召活動授權，原回歸允許未授權活動的斷言已過時，需更新驗收"}
+  },
+  "checks": {
+    "governance": {"argv": ["C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe", "-m", "unittest", "discover", "-s", "tests/argo", "-p", "test_govern.py", "-v"], "timeout": 180},
+    "typecheck": {"argv": ["node", "node_modules/typescript/bin/tsc", "--noEmit"], "timeout": 180},
+    "lint": {"argv": ["node", "node_modules/eslint/bin/eslint.js", "app/management-panels.tsx", "app/calendar-panel.tsx", "app/workspace.tsx", "app/api/workspace/route.ts", "app/member-select.tsx", "app/members-panel.tsx", "app/api/members/route.ts", "app/registration-panel.tsx", "app/registration-types.ts", "app/api/registration-forms/route.ts"], "timeout": 180},
+    "build": {"argv": ["node", "scripts/run-framework.mjs", "build"], "timeout": 600},
+    "application_regression": {"argv": ["node", "scripts/argo/regression.mjs", "--repo=.", "--out=.argo/runtime/puzzle-ops-gantt-calendar-20260927-after", "--compare=.argo/runtime/puzzle-ops-gantt-calendar-20260927-before", "--allow-changed=admin-activities-desktop,admin-activities-mobile,admin-members-desktop,admin-members-mobile"], "timeout": 300},
+    "feature_regression": {"argv": ["node", "tests/feature/ops-gantt-calendar.mjs", "--repo=.", "--out=work/ops-gantt-calendar-argo"], "timeout": 300}
+  }
+}

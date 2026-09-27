@@ -93,6 +93,14 @@
 .mgmt-gantt-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: .78rem; }
 .mgmt-gantt-controls > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .mgmt-gantt-controls button { min-height: 34px; padding: 6px 10px; font-size: .76rem; }
+.mgmt-weekly-agenda { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mgmt-weekly-agenda section { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfe; font-size: .76rem; }
+.mgmt-weekly-agenda section.current { border-color: #bfc7ff; background: #f8f9ff; }
+.mgmt-weekly-agenda h4 { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 7px; font-size: .82rem; }
+.mgmt-weekly-agenda h4 small { color: var(--muted); font-weight: 400; }
+.mgmt-weekly-agenda section > div { margin-top: 7px; }
+.mgmt-weekly-agenda ul { padding-left: 18px; margin: 3px 0; }
+.mgmt-weekly-agenda p { margin: 0; color: var(--muted); }
 .mgmt-gantt-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; }
 .mgmt-gantt { min-width: 970px; }
 .mgmt-gantt-header,
@@ -104,9 +112,11 @@
 .mgmt-gantt-header .today { color: #3f4daa; background: var(--accent-soft); font-weight: 800; }
 .mgmt-gantt-phase { border-bottom: 1px solid var(--line); }
 .mgmt-gantt-phase:last-child { border-bottom: 0; }
-.mgmt-gantt-phase-row > button { display: grid; grid-template-columns: 18px 28px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 50px; padding: 8px 12px; text-align: left; background: #fff; border: 0; border-right: 1px solid var(--line); border-radius: 0; }
-.mgmt-gantt-phase-row > button small { color: var(--muted); line-height: 1.25; }
-.mgmt-gantt-phase-row > button em { min-width: 24px; padding: 3px 6px; color: var(--muted); background: var(--bg); border-radius: 99px; font-size: .7rem; font-style: normal; text-align: center; }
+.mgmt-gantt-phase-title { display: flex; align-items: center; min-width: 0; border-right: 1px solid var(--line); }
+.mgmt-gantt-phase-title > button:first-child { display: grid; flex: 1; grid-template-columns: 18px 28px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-width: 0; min-height: 50px; padding: 8px 6px 8px 12px; text-align: left; background: #fff; border: 0; border-radius: 0; }
+.mgmt-gantt-phase-title > button:last-child:not(:first-child) { min-height: 32px; padding: 5px; margin-right: 5px; font-size: .7rem; }
+.mgmt-gantt-phase-title small { color: var(--muted); line-height: 1.25; }
+.mgmt-gantt-phase-title em { min-width: 24px; padding: 3px 6px; color: var(--muted); background: var(--bg); border-radius: 99px; font-size: .7rem; font-style: normal; text-align: center; }
 .mgmt-gantt-weeks { display: grid; grid-template-columns: repeat(11, minmax(60px, 1fr)); min-height: 100%; }
 .mgmt-gantt-weeks > span { position: relative; display: grid; place-items: center; min-height: 38px; border-right: 1px solid var(--line); }
 .mgmt-gantt-weeks > span:last-child { border-right: 0; }
@@ -118,6 +128,10 @@
 .mgmt-gantt-task-row i { display: block; width: 76%; height: 10px; background: var(--accent); border-radius: 99px; }
 .mgmt-gantt-task-row i.done { background: var(--green); }
 .mgmt-gantt-task-row i.blocked { background: #db873b; }
+.mgmt-gantt-plan { display: grid; gap: 4px; padding: 11px 14px 11px 42px; background: #f8f9ff; border-top: 1px dashed var(--line); font-size: .8rem; }
+.mgmt-gantt-plan span { color: var(--muted); }
+.mgmt-gantt-plan ul, .mgmt-gantt-mobile article ul { padding-left: 20px; margin: 3px 0; }
+.mgmt-gantt-plan p { margin: 2px 0 0; }
 .mgmt-gantt-empty-phase { padding: 10px 14px 10px 42px; margin: 0; color: var(--muted); background: #fbfcfe; border-top: 1px dashed var(--line); font-size: .8rem; }
 .mgmt-gantt-mobile { display: none; }
 .mgmt-empty-inline { padding: 26px 8px; color: var(--muted); text-align: center; }
@@ -182,6 +196,7 @@
   .mgmt-dialog-actions > button { flex: 1 1 130px; }
   .mgmt-admin-callout { align-items: flex-start; }
   .mgmt-gantt-controls { align-items: flex-start; flex-direction: column; }
+  .mgmt-weekly-agenda { grid-template-columns: 1fr; }
   .mgmt-gantt-desktop { display: none; }
   .mgmt-gantt-mobile { display: grid; gap: 8px; }
   .mgmt-mobile-phase-hint { margin: 0 0 2px; color: var(--muted); font-size: .76rem; }

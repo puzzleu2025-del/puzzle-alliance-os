@@ -1,0 +1,21 @@
+{
+  "REQUESTED_CHANGE": "活動管理列表把業務主責誤標為活動總召；僅將該標籤與既有活動表單的活動主責用語一致，避免職權設定看似仍在活動頁。",
+  "ALLOWED_SCOPE": {
+    ".argo/contracts/puzzle-activity-owner-label-20260927.json": "本次 exact-file 合約與驗收範圍",
+    "app/management-panels.tsx": "只改活動列表中 activity.owner 的顯示標籤，不改資料欄位、職權、活動內容或其他介面"
+  },
+  "PROTECTED_SCOPE": ["Login/Auth/RBAC", "app/page.tsx", "app/layout.tsx", "app/workspace.tsx", "Global CSS/Theme", "API", "DB/schema/migrations", "Environment", "Deployment", "dependencies/config", "governance", "members", "registration", "tasks", "meetings", "Gantt", "docs/argo_audit.md"],
+  "EXPECTED_SIDE_EFFECTS": ["活動列表 activity.owner 的標籤由活動總召改為活動主責；資料內容與所有其他畫面不變"],
+  "acceptance": ["活動列表與活動表單均稱活動主責，職權仍只在成員管理設定", "完整 diff 只含本合約與活動列表一處文字變更，既有未追蹤檔案不受影響", "隔離 app 啟動、登入/登出、導覽、RBAC、相鄰頁、console/network 及桌機/手機畫面回歸通過"],
+  "executor": "root-executor",
+  "reviewer": "ui-scope-independent-reviewer-agent",
+  "protected_exceptions": {"app/management-panels.tsx": {"user_authorization": "使用者要求活動管理不得顯示職權規劃；活動列表同一業務欄位殘留活動總召標籤直接造成混淆"}},
+  "checks": {
+    "governance": {"argv": ["C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe", "-m", "unittest", "discover", "-s", "tests/argo", "-p", "test_govern.py", "-v"], "timeout": 180},
+    "typecheck": {"argv": ["node", "node_modules/typescript/bin/tsc", "--noEmit"], "timeout": 180},
+    "lint": {"argv": ["node", "node_modules/eslint/bin/eslint.js", "app/management-panels.tsx"], "timeout": 180},
+    "build": {"argv": ["node", "scripts/run-framework.mjs", "build"], "timeout": 600},
+    "application_regression": {"argv": ["node", "scripts/argo/regression.mjs", "--repo=.", "--out=work/la27", "--compare=work/lb3", "--allow-changed=admin-activities-desktop,admin-activities-mobile"], "timeout": 300},
+    "feature_regression": {"argv": ["node", "tests/feature/ops-gantt-calendar.mjs", "--repo=.", "--out=work/lf27"], "timeout": 300}
+  }
+}

@@ -535,7 +535,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
                 <p className="muted">舉辦日 {dateLabel(activity.date)}</p>
                 <p className="muted">籌備 {dateLabel(activity.startDate || activityPlanningDates(activity.date).startDate)}－{dateLabel(activity.endDate || activityPlanningDates(activity.date).endDate)}</p>
                 <dl className="mgmt-compact-list">
-                  <div><dt>活動總召</dt><dd>{activity.owner || "未指派"}</dd></div>
+                  <div><dt>活動主責</dt><dd>{activity.owner || "未指派"}</dd></div>
                   <div><dt>職務代理</dt><dd>{activity.proxy || "未指派"}</dd></div>
                   <div><dt>場地</dt><dd>{activity.location || "未設定"}</dd></div>
                   <div><dt>工作組</dt><dd>{activity.teams?.join("、") || "未設定"}</dd></div>

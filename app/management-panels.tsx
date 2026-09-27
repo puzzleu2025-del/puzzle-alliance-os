@@ -391,7 +391,7 @@ function Gantt({ activity, tasks, onEditPhase }: { activity: Activity; tasks: Ta
   );
 }
 
-function ActivityFields({ activity, userName, members, disabled, canAssign }: { activity?: Activity; userName: string; members: MemberOption[]; disabled: boolean; canAssign: boolean }) {
+function ActivityFields({ activity, userName, members, disabled }: { activity?: Activity; userName: string; members: MemberOption[]; disabled: boolean }) {
   const updateSchedule = (input: HTMLInputElement) => {
     const form = input.form;
     if (!form) return;
@@ -404,7 +404,7 @@ function ActivityFields({ activity, userName, members, disabled, canAssign }: { 
     if (!end.value || end.value === oldDates.endDate) end.value = nextDates.endDate;
     input.dataset.previousDate = input.value;
   };
-  return <fieldset disabled={disabled} className="mgmt-form-grid">
+  return <fieldset disabled={disabled} className="mgmt-form-grid mgmt-activity-form-grid">
     <label className="mgmt-span-2">活動名稱<input name="name" required maxLength={200} defaultValue={activity?.name} autoFocus /></label>
     <label className="mgmt-span-2">活動舉辦日（甘特圖第 0 週）<input name="eventDate" type="date" required defaultValue={activity?.date} onChange={(event) => updateSchedule(event.currentTarget)} /><small>選擇活動日後自動反推 P1–P9 籌備週期；可調整下方起訖及各階段日期。</small></label>
     <label>籌備開始<input name="startDate" type="date" defaultValue={activity?.startDate} /></label>
@@ -414,13 +414,11 @@ function ActivityFields({ activity, userName, members, disabled, canAssign }: { 
     <label>活動類型<input name="type" maxLength={100} defaultValue={activity?.type} placeholder="例：聯誼、工作坊" /></label>
     <label>活動規模<input name="size" maxLength={100} defaultValue={activity?.size} placeholder="例：中型、50 人" /></label>
     <label>目標人數<input name="targetAttendance" type="number" min="0" step="1" inputMode="numeric" defaultValue={activity?.targetAttendance} /></label>
-    <label>活動總召<MemberSelect name="owner" members={members} defaultValue={activity?.owner || userName} required /></label>
-    <label>職務代理<MemberSelect name="proxy" members={members} defaultValue={activity?.proxy} /></label>
-    {canAssign && <><label>獲授權總召（可多場）<select name="coordinatorIds" multiple size={Math.min(5, Math.max(3, members.length))} defaultValue={activity?.coordinatorIds ?? []}>{(activity?.coordinatorIds ?? []).filter((id) => !members.some((person) => person.id === id && person.role === "coordinator")).map((id) => <option key={id} value={id}>{id}（既有授權）</option>)}{members.filter((person) => person.role === "coordinator").map((person) => <option key={person.id} value={person.id}>{person.name}（@{person.username}）</option>)}</select><small>可按 Ctrl／⌘ 選取多位。</small></label><label>見習總召（只可一場）<select name="traineeCoordinatorId" defaultValue={activity?.traineeCoordinatorId || ""}><option value="">未指派</option>{activity?.traineeCoordinatorId && !members.some((person) => person.id === activity.traineeCoordinatorId && person.role === "trainee_coordinator") && <option value={activity.traineeCoordinatorId}>{activity.traineeCoordinatorId}（既有授權）</option>}{members.filter((person) => person.role === "trainee_coordinator").map((person) => <option key={person.id} value={person.id}>{person.name}（@{person.username}）</option>)}</select></label></>}
-    <label>場地<input name="location" maxLength={200} defaultValue={activity?.location} /></label>
-    <label className="mgmt-span-2">工作組（逗號分隔）<input name="teams" defaultValue={activity?.teams?.join(", ")} placeholder="企劃, 場務, 公關" maxLength={500} /></label>
     <label>預算<input name="budget" type="number" min="0" step="1" inputMode="numeric" defaultValue={activity?.budget} /></label>
-    <label className="mgmt-span-2">本週里程碑<input name="currentMilestone" maxLength={300} defaultValue={activity?.currentMilestone} /></label>
+    <label>活動主責<MemberSelect name="owner" members={members} defaultValue={activity?.owner || userName} required /></label>
+    <label>職務代理<MemberSelect name="proxy" members={members} defaultValue={activity?.proxy} /></label>
+    <label className="mgmt-span-2">場地<input name="location" maxLength={200} defaultValue={activity?.location} /></label>
+    <label className="mgmt-span-2">工作組（逗號分隔）<input name="teams" defaultValue={activity?.teams?.join(", ")} placeholder="企劃, 場務, 公關" maxLength={500} /></label>
     <label className="mgmt-span-2">活動說明<textarea name="description" maxLength={5000} defaultValue={activity?.description} /></label>
   </fieldset>;
 }
@@ -439,6 +437,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
     event.preventDefault();
     if (submitting || busy) return;
     const form = new FormData(event.currentTarget);
+    const latest = original ? data.activities.find((row) => row.id === original.id) ?? original : undefined;
     const eventDate = field(form, "eventDate");
     const defaults = activityPlanningDates(eventDate);
     const startDate = field(form, "startDate") || defaults.startDate;
@@ -467,10 +466,10 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
       type: field(form, "type"),
       size: field(form, "size"),
       targetAttendance: Number(field(form, "targetAttendance")) || undefined,
-      currentMilestone: field(form, "currentMilestone"),
+      currentMilestone: latest?.currentMilestone,
       progress: Number(field(form, "progress")) || 0,
-      coordinatorIds: canManageAll ? form.getAll("coordinatorIds").map(String) : original?.coordinatorIds,
-      traineeCoordinatorId: canManageAll ? field(form, "traineeCoordinatorId") : original?.traineeCoordinatorId,
+      coordinatorIds: latest?.coordinatorIds,
+      traineeCoordinatorId: latest?.traineeCoordinatorId,
     };
     const tasks = original && original.date !== item.date ? data.tasks.map((task) => {
       if (task.activityId !== original.id || !task.phaseId) return task;
@@ -558,7 +557,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
         <Dialog title="建立活動" close={() => !submitting && !busy && setCreating(false)} wide>
           <form onSubmit={(event) => void submit(event)}>
             <FormStatus failed={failed} />
-            <ActivityFields userName={userName} members={memberOptions} disabled={submitting || busy} canAssign={canManageAll} />
+            <ActivityFields userName={userName} members={memberOptions} disabled={submitting || busy} />
             <div className="mgmt-dialog-actions">
               <button type="button" disabled={submitting || busy} onClick={() => setCreating(false)}>取消</button>
               <button className="primary" disabled={submitting || busy} type="submit">{submitting || busy ? "儲存中…" : "建立並同步"}</button>
@@ -579,7 +578,6 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
                 <div><small>活動日期</small><b>{dateLabel(detail.date)}</b></div>
                 <div><small>主責／代理</small><b>{detail.owner || "未指派"}／{detail.proxy || "未指派"}</b></div>
                 <div><small>狀態</small><b>{detail.status}</b></div>
-                <div className="milestone"><small>本週里程碑</small><b>{detail.currentMilestone || "尚未設定"}</b></div>
               </div>
               <div className="mgmt-activity-summary">
                 <div><small>完成率</small><strong>{activityProgress(detail, data.tasks)}%</strong><span>排除不適用任務</span></div>
@@ -591,8 +589,6 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
                 <div><small>目標人數</small><b>{detail.targetAttendance ? `${detail.targetAttendance} 人` : "未設定"}</b></div>
                 <div><small>場地</small><b>{detail.location || "未設定"}</b></div>
                 <div><small>工作組</small><b>{detail.teams?.join("、") || "未設定"}</b></div>
-                <div><small>獲授權總召</small><b>{detail.coordinatorIds?.map((id) => memberOptions.find((person) => person.id === id)?.name || "既有成員").join("、") || "未設定"}</b></div>
-                <div><small>見習總召</small><b>{memberOptions.find((person) => person.id === detail.traineeCoordinatorId)?.name || (detail.traineeCoordinatorId ? "既有成員" : "未設定")}</b></div>
                 <div><small>預算</small><b>{detail.budget ? `NT$ ${Number(detail.budget).toLocaleString("zh-TW")}` : "未設定"}</b></div>
               </div>
             </>;
@@ -606,7 +602,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
           </section>
         </Dialog>
       )}
-      {editing && <Dialog title={`編輯活動：${editing.name}`} close={() => !submitting && !busy && setEditing(null)} wide><form onSubmit={(event) => void submit(event, editing)}><FormStatus failed={failed} /><ActivityFields activity={editing} userName={userName} members={memberOptions} disabled={submitting || busy} canAssign={canManageAll} /><div className="mgmt-dialog-actions"><button type="button" disabled={submitting || busy} onClick={() => setEditing(null)}>取消</button><button className="primary" type="submit" disabled={submitting || busy}>儲存活動變更</button></div></form></Dialog>}
+      {editing && <Dialog title={`編輯活動：${editing.name}`} close={() => !submitting && !busy && setEditing(null)} wide><form onSubmit={(event) => void submit(event, editing)}><FormStatus failed={failed} /><ActivityFields activity={editing} userName={userName} members={memberOptions} disabled={submitting || busy} /><div className="mgmt-dialog-actions"><button type="button" disabled={submitting || busy} onClick={() => setEditing(null)}>取消</button><button className="primary" type="submit" disabled={submitting || busy}>儲存活動變更</button></div></form></Dialog>}
       {detail && editingPhase && <Dialog title={`編輯 ${editingPhase} 階段`} close={() => !submitting && !busy && setEditingPhase(null)}><form onSubmit={(event) => void submitPhase(event)}><FormStatus failed={failed} /><fieldset disabled={submitting || busy} className="mgmt-form-grid"><label>階段開始<input name="startDate" type="date" required defaultValue={activityPhaseSchedule(detail, editingPhase)?.startDate} /></label><label>階段結束<input name="due" type="date" required defaultValue={activityPhaseSchedule(detail, editingPhase)?.due} /></label><label>階段主責<MemberSelect name="owner" members={memberOptions} defaultValue={detail.phasePlans?.[editingPhase]?.owner} /></label><label>職務代理<MemberSelect name="proxy" members={memberOptions} defaultValue={detail.phasePlans?.[editingPhase]?.proxy} /></label><label>完成率（%）<input name="progress" type="number" min="0" max="100" step="1" required defaultValue={detail.phasePlans?.[editingPhase]?.progress ?? 0} /></label><label className="mgmt-span-2">每週工作重點<textarea name="notes" maxLength={2000} defaultValue={detail.phasePlans?.[editingPhase]?.notes} placeholder="這階段本週要完成什麼" /></label></fieldset><div className="mgmt-dialog-actions"><button type="button" disabled={submitting || busy} onClick={() => setEditingPhase(null)}>取消</button><button className="primary" type="submit" disabled={submitting || busy}>儲存階段進度</button></div></form></Dialog>}
     </>
   );

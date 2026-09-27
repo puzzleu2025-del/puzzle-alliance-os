@@ -1,0 +1,45 @@
+{
+  "REQUESTED_CHANGE": "依使用者更正，獲授權總召與見習總召的逐場職權只在成員管理設定；活動管理移除職權欄和手填本週里程碑，局部統一活動設定表單尺寸與排列；保留既有資料與其他頁面。",
+  "ALLOWED_SCOPE": {
+    ".argo/contracts/puzzle-member-grants-activity-form-20260927.json": "本次 exact-file 合約與驗收範圍",
+    "app/management-panels.tsx": "活動表單和詳情移除職權及手填本週里程碑，保存時保留原有資料並使用局部表單 class",
+    "app/management-panels.css": "只調整活動表單欄位的局部尺寸與排列，不影響共用任務及會議表單",
+    "app/members-panel.tsx": "在成員管理為管理員提供總召多場及見習總召單場活動職權設定，其他成員功能不變",
+    "app/members-panel.css": "僅為成員管理的活動職權控制補局部樣式",
+    "app/api/workspace/route.ts": "新增專用活動職權操作並限制既有活動操作不得夾帶職權變更；保留原資料及 CAS/稽核",
+    "scripts/argo/regression.mjs": "原回歸 fixture 以新職權操作指派總召，維持登入/導覽/畫面回歸",
+    "tests/feature/ops-gantt-calendar.mjs": "新增成員管理職權 UI、資料保存、角色與單場限制及活動表單範圍的隔離驗收"
+  },
+  "PROTECTED_SCOPE": ["Login/Auth", "app/page.tsx", "app/layout.tsx", "app/workspace.tsx", "Global CSS/Theme", "DB/schema/migrations", "Environment", "Deployment", "dependencies/config", "governance", "registration", "tasks", "meetings", "docs/argo_audit.md"],
+  "EXPECTED_SIDE_EFFECTS": [
+    "既有 coordinatorIds、traineeCoordinatorId、currentMilestone 原樣保存，不遷移或重寫正式資料",
+    "新活動須先建立，再由管理員於成員管理授權；總召與見習總召在未獲授權前不能編輯該活動",
+    "活動甘特現有每週進度及可調階段保持不變；手填本週里程碑不再顯示",
+    "活動表單局部尺寸更一致，其他任務/會議/報名表單樣式不改"
+  ],
+  "acceptance": [
+    "活動建立、編輯、詳情都不顯示獲授權總召與見習總召職權控件及手填本週里程碑；保留活動主責與代理業務欄位",
+    "系統與一般管理員可在成員管理指定總召多場或見習總召單場，非管理員不能授權；跨重新整理保存並使原權限生效",
+    "活動業務編輯不會抹去既有職權及舊里程碑值；職權操作不得改寫活動其他欄位，並處理版本衝突",
+    "桌機與手機的活動建立/編輯表單尺寸與排列一致；其他頁面及甘特圖無非預期變化",
+    "完整 diff、隔離 D1 登入/導覽/RBAC/相鄰頁、console/network 與桌機/手機畫面回歸通過"
+  ],
+  "executor": "root-executor",
+  "reviewer": "independent-scope-reviewer-agent",
+  "protected_exceptions": {
+    "app/management-panels.tsx": {"user_authorization": "本次明確要求移出活動管理的職權設定與本週里程碑"},
+    "app/management-panels.css": {"user_authorization": "本次明確要求整理活動設定表格尺寸與排列"},
+    "app/members-panel.tsx": {"user_authorization": "本次明確要求職權規劃只在成員管理設定"},
+    "app/members-panel.css": {"user_authorization": "成員管理新增職權選擇需要局部樣式"},
+    "app/api/workspace/route.ts": {"user_authorization": "活動職權限定由成員管理之管理員操作，需伺服器端權限及資料保存"},
+    "scripts/argo/regression.mjs": {"user_authorization": "角色授權操作轉移後需更新原隔離回歸 fixture"}
+  },
+  "checks": {
+    "governance": {"argv": ["C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe", "-m", "unittest", "discover", "-s", "tests/argo", "-p", "test_govern.py", "-v"], "timeout": 180},
+    "typecheck": {"argv": ["node", "node_modules/typescript/bin/tsc", "--noEmit"], "timeout": 180},
+    "lint": {"argv": ["node", "node_modules/eslint/bin/eslint.js", "app/management-panels.tsx", "app/members-panel.tsx", "app/api/workspace/route.ts"], "timeout": 180},
+    "build": {"argv": ["node", "scripts/run-framework.mjs", "build"], "timeout": 600},
+    "application_regression": {"argv": ["node", "scripts/argo/regression.mjs", "--repo=.", "--out=work/ops-after-27", "--compare=work/ops-before-27", "--allow-changed=admin-activities-desktop,admin-activities-mobile,admin-members-desktop,admin-members-mobile"], "timeout": 300},
+    "feature_regression": {"argv": ["node", "tests/feature/ops-gantt-calendar.mjs", "--repo=.", "--out=work/ops-grants-27"], "timeout": 300}
+  }
+}

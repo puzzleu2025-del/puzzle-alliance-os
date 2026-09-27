@@ -133,7 +133,7 @@ try {
     startDate: '2026-08-06', endDate: '2026-10-15', proxy: 'Ops Member', location: 'Before venue', teams: ['企劃'],
     progress: 0, budget: 1000, type: '工作坊', size: '中型', targetAttendance: 50, currentMilestone: 'Before milestone',
   };
-  const otherActivity = { id: 'other-activity', name: 'Other Activity', date: '2026-10-02', owner: 'Ops Coordinator', status: '規劃中', description: 'Other', coordinatorIds: [coordinatorId], traineeCoordinatorId: traineeId };
+  const otherActivity = { id: 'other-activity', name: 'Other Activity', date: '2026-10-02', owner: 'Ops Coordinator', status: '規劃中', description: 'Other' };
   await mutate('Seed own activity', 'create_activity', (current) => ({ ...current, activities: [...current.activities, activity] }));
   await mutate('Seed other activity', 'create_activity', (current) => ({ ...current, activities: [...current.activities, otherActivity] }));
   const task = {
@@ -160,10 +160,38 @@ try {
   await adminPage.goto(base);
   await adminPage.getByRole('heading', { name: '營運總覽', exact: true }).waitFor();
   await adminPage.locator('.sync').filter({ hasText: '已同步' }).waitFor();
+  await open(adminPage, '成員管理');
+  const coordinatorRow = adminPage.locator('.members-table-wrap tr').filter({ hasText: '@ops.coordinator' });
+  await coordinatorRow.getByRole('button', { name: '設定活動職權' }).click();
+  const coordinatorGrantDialog = adminPage.getByRole('dialog', { name: '設定 Ops Coordinator 的活動職權' });
+  await coordinatorGrantDialog.screenshot({ path: path.join(out, 'member-authority-desktop.png') });
+  await adminPage.setViewportSize({ width: 390, height: 844 });
+  check('Member authority dialog fits mobile viewport', await adminPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await coordinatorGrantDialog.screenshot({ path: path.join(out, 'member-authority-mobile.png') });
+  await adminPage.setViewportSize({ width: 1440, height: 1000 });
+  await coordinatorGrantDialog.getByRole('checkbox', { name: 'Other Activity' }).check();
+  await coordinatorGrantDialog.getByRole('button', { name: '儲存活動職權' }).click();
+  await coordinatorGrantDialog.waitFor({ state: 'hidden' });
+  const traineeRow = adminPage.locator('.members-table-wrap tr').filter({ hasText: '@ops.trainee' });
+  await traineeRow.getByRole('button', { name: '設定活動職權' }).click();
+  const traineeGrantDialog = adminPage.getByRole('dialog', { name: '設定 Ops Trainee 的活動職權' });
+  await traineeGrantDialog.getByLabel('獲授權活動').selectOption(otherActivity.id);
+  await traineeGrantDialog.getByRole('button', { name: '儲存活動職權' }).click();
+  await traineeGrantDialog.waitFor({ state: 'hidden' });
+  const assignedActivity = (await workspace()).state.activities.find((row) => row.id === otherActivity.id);
+  check('Member management grants persist without changing activity details', assignedActivity?.coordinatorIds?.includes(coordinatorId) && assignedActivity?.traineeCoordinatorId === traineeId && assignedActivity?.description === 'Other');
+  const grantBaseline = await workspace();
+  const mixedGrant = { ...grantBaseline.state, activities: grantBaseline.state.activities.map((row) => row.id === activity.id ? { ...row, coordinatorIds: [coordinatorId], description: 'Unexpected edit' } : row) };
+  await expectStatus('Authority action cannot change business details', admin, '/api/workspace', 403, 'PUT', { state: mixedGrant, version: grantBaseline.version, action: 'assign_activity_authority' });
+  const forgedGrant = { ...grantBaseline.state, activities: grantBaseline.state.activities.map((row) => row.id === activity.id ? { ...row, coordinatorIds: [coordinatorId] } : row) };
+  await expectStatus('Coordinator cannot grant activity authority', coordinator, '/api/workspace', 403, 'PUT', { state: forgedGrant, version: grantBaseline.version, action: 'assign_activity_authority' });
+  await expectStatus('Activity edit cannot carry authority changes', admin, '/api/workspace', 403, 'PUT', { state: forgedGrant, version: grantBaseline.version, action: 'edit_activity' });
+  await expectStatus('Stale member authority version is rejected', admin, '/api/workspace', 409, 'PUT', { state: forgedGrant, version: grantBaseline.version - 1, action: 'assign_activity_authority' });
   await open(adminPage, '活動管理');
   await adminPage.getByRole('button', { name: '查看活動詳情與甘特圖' }).first().click();
   const activityDialog = adminPage.getByRole('dialog', { name: 'Ops Activity' });
   await activityDialog.waitFor();
+  check('Activity detail omits authority and manual weekly milestone', await activityDialog.getByText('獲授權總召').count() === 0 && await activityDialog.getByText('見習總召').count() === 0 && await activityDialog.getByText('本週里程碑').count() === 0);
   check('Gantt shows default weekly plan without creating phase tasks', await activityDialog.getByText('P1', { exact: true }).count() > 0 && await activityDialog.getByText('目標、對象、預算與活動日期').count() > 0);
   check('Gantt does not create workspace tasks', (await workspace()).state.tasks.length === 4);
   await activityDialog.getByRole('button', { name: '編輯 P1 階段' }).click();
@@ -182,6 +210,15 @@ try {
   await expectStatus('Gantt phase rejects unknown member', admin, '/api/workspace', 400, 'PUT', { state: invalidPhase, version: afterPhase.version, action: 'edit_phase' });
   await activityDialog.getByRole('button', { name: '編輯活動', exact: true }).click();
   const activityEditDialog = adminPage.getByRole('dialog', { name: '編輯活動：Ops Activity' });
+  check('Activity form omits authority and manual milestone controls', await activityEditDialog.locator('[name="coordinatorIds"], [name="traineeCoordinatorId"], [name="currentMilestone"]').count() === 0);
+  const desktopControlHeights = await activityEditDialog.locator('.mgmt-activity-form-grid input:not([type="hidden"]), .mgmt-activity-form-grid select').evaluateAll((controls) => controls.map((control) => Math.round(control.getBoundingClientRect().height)));
+  check('Activity form controls share one desktop height', new Set(desktopControlHeights).size === 1 && desktopControlHeights[0] === 46);
+  await activityEditDialog.screenshot({ path: path.join(out, 'activity-form-desktop.png') });
+  await adminPage.setViewportSize({ width: 390, height: 844 });
+  const mobileControlHeights = await activityEditDialog.locator('.mgmt-activity-form-grid input:not([type="hidden"]), .mgmt-activity-form-grid select').evaluateAll((controls) => controls.map((control) => Math.round(control.getBoundingClientRect().height)));
+  check('Activity form controls share one mobile height without overflow', new Set(mobileControlHeights).size === 1 && mobileControlHeights[0] === 46 && await adminPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await activityEditDialog.screenshot({ path: path.join(out, 'activity-form-mobile.png') });
+  await adminPage.setViewportSize({ width: 1440, height: 1000 });
   await activityEditDialog.locator('select[name="owner"]').selectOption('Ops Manager');
   await activityEditDialog.locator('select[name="proxy"]').selectOption('嘉駿');
   await activityEditDialog.locator('input[name="location"]').fill('After venue');
@@ -192,7 +229,7 @@ try {
   await activityEditDialog.waitFor({ state: 'hidden' });
   const afterActivity = await workspace();
   const savedActivity = afterActivity.state.activities.find((row) => row.id === activity.id);
-  check('Admin edits all activity details without losing Gantt override', savedActivity?.owner === 'Ops Manager' && savedActivity?.proxy === '嘉駿' && savedActivity?.location === 'After venue' && savedActivity?.startDate === '2026-08-05' && savedActivity?.endDate === '2026-10-16' && savedActivity?.description === 'After edit' && savedActivity?.phasePlans?.P1?.progress === 45);
+  check('Admin edits activity details without losing Gantt or old milestone data', savedActivity?.owner === 'Ops Manager' && savedActivity?.proxy === '嘉駿' && savedActivity?.location === 'After venue' && savedActivity?.startDate === '2026-08-05' && savedActivity?.endDate === '2026-10-16' && savedActivity?.description === 'After edit' && savedActivity?.phasePlans?.P1?.progress === 45 && savedActivity?.currentMilestone === 'Before milestone');
   const forgedActivity = { ...afterActivity.state, activities: afterActivity.state.activities.map((row) => row.id === activity.id ? { ...row, location: 'Forged venue' } : row) };
   await expectStatus('Member cannot forge activity edit', member, '/api/workspace', 403, 'PUT', { state: forgedActivity, version: afterActivity.version, action: 'edit_activity' });
   await expectStatus('Coordinator cannot edit unassigned activity', coordinator, '/api/workspace', 403, 'PUT', { state: forgedActivity, version: afterActivity.version, action: 'edit_activity' });
@@ -324,7 +361,8 @@ try {
   check('Event date retains manually overridden dates and phase plan', keptManual?.startDate === '2026-09-17' && keptManual?.due === '2026-09-24' && shiftedActivity?.startDate === '2026-08-05' && shiftedActivity?.endDate === '2026-10-16' && shiftedActivity?.phasePlans?.P1?.due === '2026-08-15');
   const beforeGrant = await workspace();
   const duplicateTraineeGrant = { ...beforeGrant.state, activities: beforeGrant.state.activities.map((row) => row.id === activity.id ? { ...row, traineeCoordinatorId: traineeId } : row) };
-  await expectStatus('Trainee cannot receive a second activity', admin, '/api/workspace', 400, 'PUT', { state: duplicateTraineeGrant, version: beforeGrant.version, action: 'edit_activity' });
+  await expectStatus('Activity edit cannot change member authority', admin, '/api/workspace', 403, 'PUT', { state: duplicateTraineeGrant, version: beforeGrant.version, action: 'edit_activity' });
+  await expectStatus('Trainee cannot receive a second activity', admin, '/api/workspace', 400, 'PUT', { state: duplicateTraineeGrant, version: beforeGrant.version, action: 'assign_activity_authority' });
   const traineeUnauthorized = { ...beforeGrant.state, activities: beforeGrant.state.activities.map((row) => row.id === activity.id ? { ...row, description: 'Unauthorized trainee edit' } : row) };
   await expectStatus('Trainee cannot edit unrelated activity', trainee, '/api/workspace', 403, 'PUT', { state: traineeUnauthorized, version: beforeGrant.version, action: 'edit_activity' });
   const ownTraineeEdit = { ...beforeGrant.state, activities: beforeGrant.state.activities.map((row) => row.id === otherActivity.id ? { ...row, description: 'Trainee configured' } : row) };
@@ -350,6 +388,9 @@ try {
   const legacyEdit = { ...beforeLegacyEdit.state, activities: beforeLegacyEdit.state.activities.map((row) => row.id === legacyActivity.id ? { ...row, description: 'Forged legacy assignment' } : row) };
   await expectStatus('Duplicate-name coordinator cannot claim legacy activity', coordinator, '/api/workspace', 403, 'PUT', { state: legacyEdit, version: beforeLegacyEdit.version, action: 'edit_activity' });
   await expectStatus('Duplicate-name coordinator cannot view legacy registration', coordinator, `/api/registration-forms?activityId=${legacyActivity.id}`, 403);
+  const managerGrant = { ...beforeLegacyEdit.state, activities: beforeLegacyEdit.state.activities.map((row) => row.id === legacyActivity.id ? { ...row, coordinatorIds: [coordinatorId] } : row) };
+  await expectStatus('General manager can assign coordinator authority', manager, '/api/workspace', 200, 'PUT', { state: managerGrant, version: beforeLegacyEdit.version, action: 'assign_activity_authority' });
+  check('Manager authority assignment persists', (await workspace()).state.activities.find((row) => row.id === legacyActivity.id)?.coordinatorIds?.includes(coordinatorId));
   check('No browser runtime errors', report.browserErrors.length === 0, `${report.browserErrors.length} errors`);
   await expectStatus('Active member cannot be deleted', admin, '/api/members', 409, 'POST', { action: 'delete_rejected', id: activeId });
   await expectStatus('Member cannot delete rejected applicant', member, '/api/members', 403, 'POST', { action: 'delete_rejected', id: rejectedId });

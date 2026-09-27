@@ -4,7 +4,7 @@ import { csrfError, getMember } from "@/app/admin-auth";
 export const dynamic = "force-dynamic";
 const blank = { activities: [], tasks: [], meetings: [], notices: [] };
 const noStore = { "Cache-Control": "private, no-store" };
-const allowedActions = new Set(["create_activity", "create_task", "create_meeting", "edit_activity", "edit_phase", "submit_activity", "edit_task", "edit_meeting", "complete_task", "reschedule", "confirm_meeting", "update_meeting_attendance", "read_notice", "update_workspace"]);
+const allowedActions = new Set(["create_activity", "create_task", "create_meeting", "edit_activity", "edit_phase", "submit_activity", "assign_activity_authority", "edit_task", "edit_meeting", "complete_task", "reschedule", "confirm_meeting", "update_meeting_attendance", "read_notice", "update_workspace"]);
 
 async function authorize() {
   if (!env.DB) return { error: Response.json({ error: "資料庫尚未連線" }, { status: 503 }) };
@@ -125,6 +125,18 @@ async function activityGrantError(before: ReturnType<typeof coreState>, after: R
 function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnType<typeof coreState>, role: string, userId: string, name: string, action: string, uniqueSelfName = false) {
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const isManager = managerRole(role);
+  if (action === "assign_activity_authority") {
+    if (!isManager) return "只有管理員可以設定活動職權";
+    if (!same(before.tasks, after.tasks) || !same(before.meetings, after.meetings) || !same(before.notices, after.notices)) return "活動職權操作不能修改其他資料";
+    const previous = before.activities as Record<string, unknown>[];
+    const next = after.activities as Record<string, unknown>[];
+    if (previous.length !== next.length || previous.some((row, index) => row.id !== next[index]?.id)) return "活動職權操作不能增刪或排列活動";
+    for (let index = 0; index < previous.length; index++) {
+      const original = previous[index], updated = next[index];
+      if (Object.keys({ ...original, ...updated }).some((field) => !["coordinatorIds", "traineeCoordinatorId"].includes(field) && !same(original[field], updated[field]))) return "活動職權操作不能修改活動細項";
+    }
+    return "";
+  }
   const person = (value: unknown) => uniqueSelfName && String(value ?? "").trim() === name.trim();
   const activityById = new Map((before.activities as Record<string, unknown>[]).map((row) => [row.id, row]));
   const ownsActivity = (row?: Record<string, unknown>) => assignedActivity(row, role, userId, name, uniqueSelfName);
@@ -143,6 +155,7 @@ function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnTyp
     const added = newRows.slice(oldRows.length);
     const createAction = { activities: "create_activity", tasks: "create_task", meetings: "create_meeting" }[key];
     if (added.length && action !== createAction) return "新增資料需使用對應操作";
+    if (key === "activities" && added.some((row) => row.coordinatorIds !== undefined || row.traineeCoordinatorId !== undefined)) return "新活動的職權請在成員管理設定";
     if (added.length && !isManager) {
       if (key === "activities") return "新活動及其總召授權須由管理員建立";
       if (added.some((row) => !ownsRelatedActivity(row) || submitted(activityById.get(row.activityId)))) return "只能在獲授權且尚未提交設定的活動新增資料";
@@ -151,6 +164,7 @@ function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnTyp
       const updated = newById.get(row.id)!;
       const fields = changedFields(row, updated);
       if (!fields.length) continue;
+      if (key === "activities" && fields.some((field) => field === "coordinatorIds" || field === "traineeCoordinatorId")) return "活動職權請在成員管理設定";
       if (action.startsWith("create_")) return "新增操作不能同時修改既有資料";
       if (action === "submit_activity") {
         if (key !== "activities" || fields.length !== 1 || fields[0] !== "settingsSubmittedAt" ||

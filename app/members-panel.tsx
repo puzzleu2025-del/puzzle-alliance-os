@@ -3,6 +3,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./members-panel.css";
 import { previewPasswordHash } from "../preview/preview-password";
+import type { State } from "./management-panels";
 
 export type MemberRole = "admin" | "manager" | "coordinator" | "trainee_coordinator" | "leader" | "member";
 export type MemberStatus = "pending" | "active" | "disabled" | "rejected";
@@ -138,6 +139,10 @@ export default function MembersPanel({ preview, currentUser, initialMembers, onC
   const [resetTarget, setResetTarget] = useState<Member | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
   const [resetError, setResetError] = useState("");
+  const [grantTarget, setGrantTarget] = useState<Member | null>(null);
+  const [grantWorkspace, setGrantWorkspace] = useState<{ state: State; version: number } | null>(null);
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [grantError, setGrantError] = useState("");
 
   useEffect(() => {
     if (!preview) return;
@@ -293,6 +298,56 @@ export default function MembersPanel({ preview, currentUser, initialMembers, onC
     }
   };
 
+  const openGrants = async (member: Member) => {
+    if (preview || !["admin", "manager"].includes(currentUser.role ?? "") || member.status !== "active" || !["coordinator", "trainee_coordinator"].includes(member.role)) return;
+    setGrantBusy(true);
+    setGrantError("");
+    try {
+      const response = await fetch("/api/workspace", { cache: "no-store" });
+      const body = await response.json() as { state?: State; version?: number; error?: string };
+      if (!response.ok || !body.state || typeof body.version !== "number") throw new Error(body.error || "無法載入活動職權");
+      setGrantWorkspace({ state: body.state, version: body.version });
+      setGrantTarget(member);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "無法載入活動職權");
+    } finally {
+      setGrantBusy(false);
+    }
+  };
+
+  const saveGrants = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!grantTarget || !grantWorkspace || grantBusy) return;
+    const form = new FormData(event.currentTarget);
+    const chosen = new Set(form.getAll("activityIds").map(String));
+    const traineeActivityId = String(form.get("traineeActivityId") ?? "");
+    const activities = grantWorkspace.state.activities.map((activity) => {
+      if (grantTarget.role === "coordinator") {
+        const current = activity.coordinatorIds ?? [];
+        const selected = chosen.has(activity.id);
+        if (selected === current.includes(grantTarget.id)) return activity;
+        return { ...activity, coordinatorIds: selected ? [...current, grantTarget.id] : current.filter((id) => id !== grantTarget.id) };
+      }
+      const selected = traineeActivityId === activity.id;
+      if (selected === (activity.traineeCoordinatorId === grantTarget.id)) return activity;
+      return { ...activity, traineeCoordinatorId: selected ? grantTarget.id : undefined };
+    });
+    setGrantBusy(true);
+    setGrantError("");
+    try {
+      const response = await fetch("/api/workspace", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: { ...grantWorkspace.state, activities }, version: grantWorkspace.version, action: "assign_activity_authority" }) });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(response.status === 409 ? "活動資料已變更，請重新開啟職權設定。" : body.error || "無法儲存活動職權");
+      setGrantTarget(null);
+      setGrantWorkspace(null);
+      onChanged?.();
+    } catch (reason) {
+      setGrantError(reason instanceof Error ? reason.message : "無法儲存活動職權");
+    } finally {
+      setGrantBusy(false);
+    }
+  };
+
   if (!canApprove) return <section className="members-panel" aria-labelledby="members-title"><h2 id="members-title">成員管理</h2><p>只有總召以上可以核可成員。</p></section>;
 
   return <section className="members-panel" aria-labelledby="members-title">
@@ -306,7 +361,9 @@ export default function MembersPanel({ preview, currentUser, initialMembers, onC
 
     {resetRequests.length > 0 && <section className="members-reset-requests" aria-labelledby="reset-title"><div className="members-section-head"><div><h3 id="reset-title">待重設密碼</h3><p>這些成員已提出忘記密碼申請；完成身分確認後再設定新密碼。</p></div><span className="members-reset-count">{resetRequests.length} 筆待處理</span></div><div className="members-pending-list">{resetRequests.map((member) => <article key={member.id}><div className="members-identity"><span className="members-avatar">{member.name.slice(0, 1).toUpperCase()}</span><div><b>{member.name}</b><small>@{member.username}</small>{member.email && <span>{member.email}</span>}{member.phone && <span>電話：{member.phone}</span>}{member.organization && <span>單位：{member.organization}</span>}{member.position && <span>職務：{member.position}</span>}</div></div><button className="primary" onClick={() => { setResetError(""); setResetTarget(member); }}>設定新密碼</button></article>)}</div></section>}
 
-    <section className="members-directory" aria-labelledby="directory-title"><div className="members-section-head"><div><h3 id="directory-title">成員清單</h3><p className="muted">角色只決定工作空間內的操作範圍。</p></div><label>狀態<select value={filter} onChange={(event) => setFilter(event.target.value as MemberStatus | "all")}><option value="all">全部</option>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>{loading ? <p className="members-empty" aria-live="polite">載入成員中…</p> : visible.length ? <div className="members-table-wrap"><table><thead><tr><th>成員</th><th>角色</th><th>狀態</th><th>加入時間</th><th>操作</th></tr></thead><tbody>{visible.map((member) => { const isCurrent = member.id === currentUser.id; return <tr key={member.id}><td><div className="members-identity"><span className="members-avatar">{member.name.slice(0, 1).toUpperCase()}</span><div><b>{member.name}{isCurrent ? "（你）" : ""}</b><small>@{member.username}</small>{member.email && <span>{member.email}</span>}{member.phone && <span>電話：{member.phone}</span>}{member.organization && <span>單位：{member.organization}</span>}{member.position && <span>職務：{member.position}</span>}{member.resetPending && <span className="members-reset-badge">待重設密碼</span>}</div></div></td><td><select aria-label={`調整 ${member.name} 的角色`} value={member.role} disabled={busyId === member.id || isCurrent || !canManageRole(member.role)} onChange={(event) => void patch(member, { role: event.target.value as MemberRole })}>{(isCurrent ? roles.filter(([value]) => value === member.role) : lowerRoles).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></td><td><span className={`members-status ${member.status}`}>{statusLabels[member.status]}</span></td><td>{new Date(member.createdAt).toLocaleDateString("zh-TW", { timeZone: "Asia/Taipei" })}</td><td>{member.status === "active" && !isCurrent ? <button disabled={Boolean(busyId)} onClick={() => void patch(member, { status: "disabled" })}>停用</button> : member.status === "disabled" ? <button disabled={Boolean(busyId)} onClick={() => void patch(member, { status: "active" })}>重新啟用</button> : member.status === "rejected" ? <><button disabled={Boolean(busyId)} onClick={() => void patch(member, { status: "pending" })}>恢復申請</button><button className="danger" disabled={Boolean(busyId)} onClick={() => void deleteRejected(member)}>刪除申請</button></> : null}</td></tr>; })}</tbody></table></div> : <p className="members-empty">沒有符合篩選條件的成員。</p>}</section>
+    <section className="members-directory" aria-labelledby="directory-title"><div className="members-section-head"><div><h3 id="directory-title">成員清單</h3><p className="muted">角色與活動職權由系統管理員及一般管理員設定。</p></div><label>狀態<select value={filter} onChange={(event) => setFilter(event.target.value as MemberStatus | "all")}><option value="all">全部</option>{Object.entries(statusLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>{loading ? <p className="members-empty" aria-live="polite">載入成員中…</p> : visible.length ? <div className="members-table-wrap"><table><thead><tr><th>成員</th><th>角色</th><th>狀態</th><th>加入時間</th><th>操作</th></tr></thead><tbody>{visible.map((member) => { const isCurrent = member.id === currentUser.id; const canAssignActivities = !preview && ["admin", "manager"].includes(currentUser.role ?? "") && member.status === "active" && ["coordinator", "trainee_coordinator"].includes(member.role); return <tr key={member.id}><td><div className="members-identity"><span className="members-avatar">{member.name.slice(0, 1).toUpperCase()}</span><div><b>{member.name}{isCurrent ? "（你）" : ""}</b><small>@{member.username}</small>{member.email && <span>{member.email}</span>}{member.phone && <span>電話：{member.phone}</span>}{member.organization && <span>單位：{member.organization}</span>}{member.position && <span>職務：{member.position}</span>}{member.resetPending && <span className="members-reset-badge">待重設密碼</span>}</div></div></td><td><select aria-label={`調整 ${member.name} 的角色`} value={member.role} disabled={busyId === member.id || isCurrent || !canManageRole(member.role)} onChange={(event) => void patch(member, { role: event.target.value as MemberRole })}>{(isCurrent ? roles.filter(([value]) => value === member.role) : lowerRoles).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></td><td><span className={`members-status ${member.status}`}>{statusLabels[member.status]}</span></td><td>{new Date(member.createdAt).toLocaleDateString("zh-TW", { timeZone: "Asia/Taipei" })}</td><td className="members-row-actions">{canAssignActivities && <button type="button" disabled={grantBusy || Boolean(busyId)} onClick={() => void openGrants(member)}>設定活動職權</button>}{member.status === "active" && !isCurrent ? <button disabled={Boolean(busyId)} onClick={() => void patch(member, { status: "disabled" })}>停用</button> : member.status === "disabled" ? <button disabled={Boolean(busyId)} onClick={() => void patch(member, { status: "active" })}>重新啟用</button> : member.status === "rejected" ? <><button disabled={Boolean(busyId)} onClick={() => void patch(member, { status: "pending" })}>恢復申請</button><button className="danger" disabled={Boolean(busyId)} onClick={() => void deleteRejected(member)}>刪除申請</button></> : null}</td></tr>; })}</tbody></table></div> : <p className="members-empty">沒有符合篩選條件的成員。</p>}</section>
+
+    {grantTarget && grantWorkspace && <Dialog title={`設定 ${grantTarget.name} 的活動職權`} close={() => !grantBusy && setGrantTarget(null)}><form onSubmit={(event) => void saveGrants(event)}><fieldset disabled={grantBusy}><p className="members-grant-intro">{grantTarget.role === "coordinator" ? "總召可負責多場活動。" : "見習總召只能負責一場活動。"}變更儲存後立即套用於該成員的活動權限。</p>{grantTarget.role === "coordinator" ? <div className="members-grant-list" role="group" aria-label="獲授權活動">{grantWorkspace.state.activities.map((activity) => <label key={activity.id}><input type="checkbox" name="activityIds" value={activity.id} defaultChecked={activity.coordinatorIds?.includes(grantTarget.id) ?? false} /><span>{activity.name}</span></label>)}</div> : <label>獲授權活動<select name="traineeActivityId" defaultValue={grantWorkspace.state.activities.find((activity) => activity.traineeCoordinatorId === grantTarget.id)?.id ?? ""}><option value="">未指派</option>{grantWorkspace.state.activities.filter((activity) => !activity.traineeCoordinatorId || activity.traineeCoordinatorId === grantTarget.id).map((activity) => <option key={activity.id} value={activity.id}>{activity.name}</option>)}</select></label>}{grantWorkspace.state.activities.length === 0 && <p className="members-empty">目前沒有活動；建立活動後再設定職權。</p>}</fieldset>{grantError && <p className="members-dialog-error" role="alert">{grantError}</p>}<div className="members-dialog-actions"><button type="button" disabled={grantBusy} onClick={() => setGrantTarget(null)}>取消</button><button className="primary" type="submit" disabled={grantBusy || grantWorkspace.state.activities.length === 0}>{grantBusy ? "儲存中…" : "儲存活動職權"}</button></div></form></Dialog>}
 
     {creating && <Dialog title="新增成員" close={() => !createBusy && setCreating(false)}><form onSubmit={create}><fieldset disabled={createBusy}><label>登入帳號<input name="username" required minLength={4} maxLength={32} pattern={"[A-Za-z0-9._\\-]+"} autoComplete="username" autoFocus /><small>4–32 位，可使用英文字母、數字、句點、底線與連字號。</small></label><label>姓名<input name="name" required maxLength={100} autoComplete="name" /></label><label>Email（選填）<input name="email" type="email" maxLength={254} autoComplete="email" /></label><label>聯絡電話（選填）<input name="phone" type="tel" maxLength={24} autoComplete="tel" /></label><label>所屬單位（選填）<input name="organization" maxLength={100} /></label><label>職務／身分（選填）<input name="position" maxLength={100} /></label><label>初始密碼<input name="password" type="password" required minLength={6} maxLength={256} autoComplete="new-password" /><small>至少 6 個字元；儲存後不會在介面中顯示。</small></label><label>角色<select name="role" defaultValue="member">{lowerRoles.map(([value, label, description]) => <option value={value} key={value}>{label}｜{description}</option>)}</select></label><label>加入方式<select name="status" defaultValue="active"><option value="active">直接啟用</option><option value="pending">加入待核可清單</option></select></label></fieldset><p className="members-password-note">密碼只在新增時送交驗證服務；成員清單不會顯示或回填密碼。</p><div className="members-dialog-actions"><button type="button" disabled={createBusy} onClick={() => setCreating(false)}>取消</button><button className="primary" disabled={createBusy}>{createBusy ? "儲存中…" : "新增成員"}</button></div></form></Dialog>}
     {resetTarget && <Dialog title={`重設 ${resetTarget.name} 的密碼`} close={() => !resetBusy && setResetTarget(null)}><form onSubmit={resetPassword}><fieldset disabled={resetBusy}><p className="members-reset-identity">登入帳號：<b>@{resetTarget.username}</b></p><label>新密碼<input name="newPassword" type="password" required minLength={6} maxLength={256} autoComplete="new-password" autoFocus /><small>至少 6 個字元。</small></label><label>確認新密碼<input name="confirmPassword" type="password" required minLength={6} maxLength={256} autoComplete="new-password" /></label></fieldset>{resetError && <p className="members-dialog-error" role="alert">{resetError}</p>}<p className="members-password-note">儲存後不會在介面中顯示密碼，忘記密碼標記會自動清除。</p><div className="members-dialog-actions"><button type="button" disabled={resetBusy} onClick={() => setResetTarget(null)}>取消</button><button className="primary" disabled={resetBusy}>{resetBusy ? "重設中…" : "確認重設"}</button></div></form></Dialog>}

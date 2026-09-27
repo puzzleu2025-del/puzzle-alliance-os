@@ -40,6 +40,8 @@
 .members-table-wrap th { color: var(--muted); background: #f9fafc; font-size: .76rem; }
 .members-table-wrap td { font-size: .86rem; }
 .members-table-wrap tr:last-child td { border-bottom: 0; }
+.members-row-actions { white-space: nowrap; }
+.members-row-actions button + button { margin-left: 6px; }
 .members-status { display: inline-flex; padding: 4px 8px; border: 1px solid var(--line); border-radius: 99px; font-size: .74rem; font-weight: 750; white-space: nowrap; }
 .members-status.active { color: var(--green); background: #effaf6; border-color: #cceadf; }
 .members-status.pending { color: #9a651a; background: #fff8ed; border-color: #f2ddbc; }
@@ -53,6 +55,10 @@
 .members-dialog fieldset { display: grid; gap: 13px; min-width: 0; padding: 0; margin: 0; border: 0; }
 .members-dialog label { display: grid; gap: 6px; font-size: .84rem; font-weight: 700; }
 .members-dialog label small { color: var(--muted); font-size: .74rem; font-weight: 400; }
+.members-grant-intro { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.5; }
+.members-grant-list { display: grid; gap: 8px; max-height: 300px; overflow-y: auto; }
+.members-grant-list label { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; }
+.members-grant-list input[type="checkbox"] { flex: 0 0 18px; width: 18px; min-height: 18px; height: 18px; margin: 0; }
 .members-dialog input,
 .members-dialog select { width: 100%; min-width: 0; min-height: 46px; padding: 10px 12px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 10px; font: inherit; }
 .members-password-note { padding: 10px 12px; margin-top: 14px; color: var(--muted); background: var(--bg); border-radius: 10px; font-size: .8rem; }

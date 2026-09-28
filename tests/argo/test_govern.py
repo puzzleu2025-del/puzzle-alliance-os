@@ -117,6 +117,25 @@ class GovernanceTests(unittest.TestCase):
         self.assertIn('OUT_OF_SCOPE_MODIFICATION:outside.txt', result['errors'])
         self.assertEqual(self.status(), 'REJECTED')
 
+    def test_existing_literal_route_brackets_allowed_exactly(self):
+        name = 'api/public/[slug]/route.ts'
+        self.write(name, 'original')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'literal route baseline')
+        self.contract['ALLOWED_SCOPE'] = {name: 'Exact existing dynamic route'}
+        self.start()
+        self.write(name, 'requested correction')
+        self.assertEqual(g.diff_gate(self.root, self.ident)['status'], 'PASS')
+        self.write('api/public/s/route.ts', 'not authorized')
+        self.assertEqual(g.diff_gate(self.root, self.ident)['status'], 'REJECT')
+
+    def test_nonexistent_bracket_pattern_and_globs_rejected(self):
+        self.begin()
+        for name in ('api/[abc]/route.ts', 'api/*/route.ts', 'api/?/route.ts'):
+            self.contract['ALLOWED_SCOPE'] = {name: 'Must not expand to matching files'}
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'EXACT_FILE_REASON_REQUIRED'):
+                self.plan()
+
     def test_staged_out_of_scope_rejected(self):
         self.start()
         self.write('outside.txt', 'unauthorized')

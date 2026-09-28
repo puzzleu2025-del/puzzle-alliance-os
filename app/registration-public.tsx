@@ -8,6 +8,7 @@ import {
   RegistrationSubmission,
   validateRegistrationSubmission,
 } from "./registration-types";
+import { RegistrationImage } from "./registration-image";
 
 export type RegistrationPublicProps = {
   form: RegistrationForm;
@@ -20,7 +21,7 @@ const cardStyle = { background: "#fff", border: "1px solid #e4e8f0", borderRadiu
 const gridStyle = { display: "grid", gap: 18, marginTop: 24 } as const;
 const labelStyle = { display: "grid", gap: 7, fontWeight: 700 } as const;
 const controlStyle = { width: "100%", minHeight: 46, padding: "10px 12px", border: "1px solid #d8dde7", borderRadius: 10, font: "inherit" } as const;
-const helpStyle = { color: "#70798b", fontSize: ".84rem", fontWeight: 400 } as const;
+const helpStyle = { color: "#70798b", fontSize: ".84rem", fontWeight: 400, whiteSpace: "pre-wrap", overflowWrap: "anywhere" } as const;
 const errorStyle = { color: "#a32f2f", fontSize: ".84rem", fontWeight: 600 } as const;
 
 function initialAnswers(form: RegistrationForm) {
@@ -71,7 +72,7 @@ function FieldControl({
   }
   const grouped = ["single_choice", "radio", "multiple_choice", "checkbox"].includes(field.type);
   const heading = <span id={`${id}-label`}>{field.label}{field.required && <span aria-hidden="true" style={{ color: "#b42318" }}> *</span>}</span>;
-  const content = <>{heading}{field.helpText && <small id={`${id}-help`} style={helpStyle}>{field.helpText}</small>}{control}{error && <span id={`${id}-error`} role="alert" style={errorStyle}>{error}</span>}</>;
+  const content = <>{heading}{field.helpText && <small id={`${id}-help`} style={helpStyle}>{field.helpText}</small>}<RegistrationImage value={field.image} alt={`${field.label} 圖片`} />{control}{error && <span id={`${id}-error`} role="alert" style={errorStyle}>{error}</span>}</>;
   return grouped ? <div style={labelStyle}>{content}</div> : <label style={labelStyle} htmlFor={id}>{content}</label>;
 }
 
@@ -129,5 +130,5 @@ export default function RegistrationPublic({ form, activityName, onSubmit }: Reg
   }
 
   const unavailable = form.status !== "open";
-  return <main style={shellStyle}><section style={cardStyle}><header><p style={{ color: "#5b6ee1", fontWeight: 800, letterSpacing: ".08em", margin: 0 }}>{activityName}</p><h1 style={{ margin: "6px 0 8px" }}>{form.title}</h1>{form.description && <p style={{ color: "#596275", whiteSpace: "pre-wrap" }}>{form.description}</p>}</header>{unavailable ? <p role="status" style={{ marginTop: 24, padding: 14, background: "#f5f7fb", borderRadius: 10 }}>{form.status === "closed" ? "此表單已停止收件。" : "此表單尚未開放。"}</p> : <form onSubmit={submit} noValidate><div style={gridStyle}>{form.fields.map((field) => <FieldControl key={field.id} field={field} value={answers[field.id]} error={errors[field.id]} disabled={busy} setValue={(value) => { setAnswers((current) => ({ ...current, [field.id]: value })); setErrors((current) => { const next = { ...current }; delete next[field.id]; return next; }); }} />)}</div><section style={{ marginTop: 22, padding: 14, background: "#f5f7fb", borderRadius: 10 }}><b>個人資料與隱私告知</b><p style={{ color: "#596275", whiteSpace: "pre-wrap" }}>{form.privacyNotice || "你提供的資料只用於本次活動報名、聯絡與行政作業。"}</p><label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}><input id="registration-privacy-consent" type="checkbox" checked={consent} disabled={busy} aria-invalid={consentError} aria-describedby={consentError ? "registration-consent-error" : undefined} onChange={(event) => { setConsent(event.target.checked); setConsentError(false); }} />我已閱讀並同意上述告知</label>{consentError && <span id="registration-consent-error" role="alert" style={errorStyle}>必須同意隱私告知才能送出</span>}</section>{failed && <p role="alert" style={{ marginTop: 18, color: "#a32f2f" }}>送出失敗，填寫內容已保留，請稍後再試。</p>}<button type="submit" disabled={busy} style={{ width: "100%", minHeight: 48, marginTop: 24, border: 0, borderRadius: 11, background: "#5b6ee1", color: "#fff", font: "inherit", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "送出中…" : form.submitLabel || "送出報名"}</button></form>}</section></main>;
+  return <main style={shellStyle}><section style={cardStyle}><header><p style={{ color: "#5b6ee1", fontWeight: 800, letterSpacing: ".08em", margin: 0 }}>{activityName}</p><h1 style={{ margin: "6px 0 8px" }}>{form.title}</h1><RegistrationImage value={form.image} alt={`${form.title} 主題圖片`} />{form.description && <p style={{ color: "#596275", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{form.description}</p>}</header>{unavailable ? <p role="status" style={{ marginTop: 24, padding: 14, background: "#f5f7fb", borderRadius: 10 }}>{form.status === "closed" ? "此表單已停止收件。" : "此表單尚未開放。"}</p> : <form onSubmit={submit} noValidate><div style={gridStyle}>{form.fields.map((field) => <FieldControl key={field.id} field={field} value={answers[field.id]} error={errors[field.id]} disabled={busy} setValue={(value) => { setAnswers((current) => ({ ...current, [field.id]: value })); setErrors((current) => { const next = { ...current }; delete next[field.id]; return next; }); }} />)}</div><section style={{ marginTop: 22, padding: 14, background: "#f5f7fb", borderRadius: 10 }}><b>個人資料與隱私告知</b><p style={{ color: "#596275", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{form.privacyNotice || "你提供的資料只用於本次活動報名、聯絡與行政作業。"}</p><label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}><input id="registration-privacy-consent" type="checkbox" checked={consent} disabled={busy} aria-invalid={consentError} aria-describedby={consentError ? "registration-consent-error" : undefined} onChange={(event) => { setConsent(event.target.checked); setConsentError(false); }} />我已閱讀並同意上述告知</label>{consentError && <span id="registration-consent-error" role="alert" style={errorStyle}>必須同意隱私告知才能送出</span>}</section>{failed && <p role="alert" style={{ marginTop: 18, color: "#a32f2f" }}>送出失敗，填寫內容已保留，請稍後再試。</p>}<button type="submit" disabled={busy} style={{ width: "100%", minHeight: 48, marginTop: 24, border: 0, borderRadius: 11, background: "#5b6ee1", color: "#fff", font: "inherit", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "送出中…" : form.submitLabel || "送出報名"}</button></form>}</section></main>;
 }

@@ -7,6 +7,8 @@ import { ActivitiesPanel, MeetingsPanel, RolesPanel, TasksPanel, activityPhaseSc
 import RegistrationPanel from "./registration-panel";
 import RegistrationPublic from "./registration-public";
 import MembersPanel, { type MemberRole } from "./members-panel";
+import { activityEnded, meetingEnded, taskEnded, canViewHistory } from "./record-visibility";
+import { taskDeadlineError } from "./task-deadlines";
 import type { MemberOption } from "./member-select";
 
 type User = { id: string; email: string; name: string; role?: string };
@@ -115,10 +117,14 @@ export default function Workspace({ user, preview = false, initialState = emptyS
     return () => control.abort();
   }, [data.tasks]);
 
-  const openTasks = data.tasks.filter(t => t.status !== "完成");
-  const upcoming = [...data.meetings].filter(m => new Date(m.time) >= new Date()).sort((a,b) => a.time.localeCompare(b.time));
+  const [showHistory, setShowHistory] = useState(false);
+  const historyVisible = canViewHistory(user.role) && showHistory;
+  const dashboardData = { ...data, activities: data.activities.filter(activity => historyVisible || !activityEnded(activity)) };
+  const openTasks = data.tasks.filter(t => historyVisible || !taskEnded(t, data.activities));
+  const upcoming = [...data.meetings].filter(m => historyVisible || (!meetingEnded(m) && new Date(m.time) >= new Date())).sort((a,b) => a.time.localeCompare(b.time));
   const activityName = (id: string) => data.activities.find(a => a.id === id)?.name || "未分類";
   const reschedule = async (event: CalendarEntry, date:string, time?:string) => {
+    if (event.kind === "task") { const task = data.tasks.find(row => row.id === event.id); if (task) { const deadlineError = taskDeadlineError({ ...task, startDate: undefined, due: date }, data.activities.find(activity => activity.id === task.activityId)); if (deadlineError) { setError(deadlineError); return false; } } }
     const meeting=event.kind==="meeting"?data.meetings.find(m=>m.id===event.id):undefined;
     if(date===event.date&&(!time||time===meeting?.time.slice(11,16)))return true;
     const oldDay = Date.parse(`${event.date}T00:00:00Z`);
@@ -145,14 +151,17 @@ export default function Workspace({ user, preview = false, initialState = emptyS
       startDate: activity.startDate === phaseSchedule(activity.date, "P1")?.startDate ? phaseSchedule(shiftedActivityDate, "P1")?.startDate : activity.startDate,
       endDate: activity.endDate === phaseSchedule(activity.date, "P9")?.due ? phaseSchedule(shiftedActivityDate, "P9")?.due : activity.endDate,
     } : undefined;
-    return save({...data,activities:data.activities.map(a=>event.kind==="activity"&&a.id===event.id?shiftedActivity!:a),tasks:data.tasks.map(t=>{
+    const next: State = {...data,activities:data.activities.map(a=>event.kind==="activity"&&a.id===event.id?shiftedActivity!:a),tasks:data.tasks.map(t=>{
       if (event.kind === "task" && t.id === event.id) return {...t,startDate:shiftDate(t.startDate),due:date,manualStartDate:true,manualDue:true};
       if (!activity || t.activityId !== activity.id || !t.phaseId) return t;
       const before = activityPhaseSchedule(activity, t.phaseId);
       const after = activityPhaseSchedule(shiftedActivity, t.phaseId);
       if (!before || !after) return t;
       return {...t,startDate:!t.manualStartDate && t.startDate === before.startDate ? after.startDate : t.startDate,due:!t.manualDue && t.due === before.due ? after.due : t.due};
-    }),meetings:data.meetings.map(m=>event.kind==="meeting"&&m.id===event.id?shiftMeeting(m):m),notices:[change,...data.notices]},"reschedule");
+    }),meetings:data.meetings.map(m=>event.kind==="meeting"&&m.id===event.id?shiftMeeting(m):m),notices:[change,...data.notices]};
+    const invalid = next.tasks.find(task => (event.kind === "task" && task.id === event.id || activity && task.activityId === activity.id) && taskDeadlineError(task, next.activities.find(row => row.id === task.activityId)));
+    if (invalid) { setError(`「${invalid.name}」${taskDeadlineError(invalid, next.activities.find(row => row.id === invalid.activityId))}`); return false; }
+    return save(next, "reschedule");
   };
 
   if (preview && publicFormId) {
@@ -169,7 +178,7 @@ export default function Workspace({ user, preview = false, initialState = emptyS
       <div className="content">{error && <div className="alert" role="alert">{error}<button onClick={() => void load()}>重新載入</button></div>}
         {preview && <div className="preview-banner" role="note">GitHub Pages 互動版 · 帳號、成員與報名資料保存在這個瀏覽器；正式跨裝置同步與自動寄信需要後端服務。</div>}
         {!ready ? (error ? <div className="empty">目前無法開啟工作空間，請重新載入或確認登入帳號。</div> : <Loading />) : <>
-          {page === "dashboard" && <Dashboard data={data} openTasks={openTasks} upcoming={upcoming} activityName={activityName} onNewTask={() => setPage("tasks")} />}
+          {page === "dashboard" && <>{canViewHistory(user.role) && <label className="mgmt-history-toggle"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />顯示已結束／完成項目</label>}<Dashboard data={dashboardData} openTasks={openTasks} upcoming={upcoming} activityName={activityName} onNewTask={() => setPage("tasks")} /></>}
           {page === "activities" && <ActivitiesPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} onOpenRegistrations={(activityId) => { setRegistrationActivityId(activityId); setPage("registrations"); }} />}
           {page === "tasks" && <TasksPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} />}
           {page === "registrations" && <RegistrationPanel data={data} userId={user.id} userName={user.name} userRole={user.role} memberOptions={memberOptions} busy={busy} onSave={save} preview={preview} initialActivityId={registrationActivityId || undefined} />}

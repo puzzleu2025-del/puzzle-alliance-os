@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { csrfError, getMember } from "@/app/admin-auth";
+import { taskDeadlineError } from "@/app/task-deadlines";
 
 export const dynamic = "force-dynamic";
 const blank = { activities: [], tasks: [], meetings: [], notices: [] };
@@ -41,6 +42,8 @@ export async function PUT(request: Request) {
   const uniqueSelfName = matchingNames?.results.length === 1 && matchingNames.results[0].user_id === auth.user!.userId;
   const changeError = stateChangeError(previousState, nextState, auth.user!.role, auth.user!.userId, auth.user!.displayName, action, uniqueSelfName);
   if (changeError) return Response.json({ error: changeError }, { status: 403, headers: noStore });
+  const deadlineError = changedTaskDeadlineError(previousState, nextState);
+  if (deadlineError) return Response.json({ error: deadlineError }, { status: 400, headers: noStore });
   const grantError = await activityGrantError(previousState, nextState);
   if (grantError) return Response.json({ error: grantError }, { status: 400, headers: noStore });
   if (action === "edit_phase") {
@@ -85,6 +88,25 @@ function coreState(state: { activities: unknown[]; tasks: unknown[]; meetings: u
 }
 
 type ActivityRow = Record<string, unknown>;
+
+function changedTaskDeadlineError(before: ReturnType<typeof coreState>, after: ReturnType<typeof coreState>) {
+  const priorTasks = new Map((before.tasks as Array<{ id: string }>).map((task) => [task.id, task as Record<string, unknown>]));
+  const priorActivities = new Map((before.activities as Array<{ id: string }>).map((activity) => [activity.id, activity as Record<string, unknown>]));
+  const activities = new Map((after.activities as Array<{ id: string }>).map((activity) => [activity.id, activity as Record<string, unknown>]));
+  for (const task of after.tasks as Array<{ id: string; activityId: string; due: string; startDate?: string; phaseId?: string }>) {
+    const old = priorTasks.get(task.id);
+    const activity = activities.get(task.activityId);
+    const oldActivity = priorActivities.get(task.activityId);
+    const changed = !old || ["due", "startDate", "phaseId", "activityId"].some((key) => old[key] !== task[key as keyof typeof task]);
+    const planChanged = task.phaseId && (activity?.date !== oldActivity?.date ||
+      (activity?.phasePlans as Record<string, { due?: string }> | undefined)?.[task.phaseId]?.due !== (oldActivity?.phasePlans as Record<string, { due?: string }> | undefined)?.[task.phaseId]?.due);
+    if (changed || planChanged) {
+      const error = taskDeadlineError(task, activity);
+      if (error) return error;
+    }
+  }
+  return "";
+}
 const managerRole = (role: string) => role === "admin" || role === "manager";
 const submitted = (activity?: ActivityRow) => !!activity?.settingsSubmittedAt;
 function assignedActivity(activity: ActivityRow | undefined, role: string, userId: string, name: string, uniqueSelfName = false) {

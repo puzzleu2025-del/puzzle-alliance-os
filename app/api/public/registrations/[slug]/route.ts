@@ -28,7 +28,7 @@ export async function GET(_request: Request, context: { params: Promise<{ slug: 
   const activity = publicActivity(workspace?.data, loaded.row.activityId);
   if (!activity) return Response.json({ error: "活動不存在" }, { status: 404, headers: noStore });
   const { form } = loaded;
-  return Response.json({ activity, form: { id:form.id,activityId:form.activityId,title:form.title,description:form.description,status:form.status,fields:form.fields,submitLabel:form.submitLabel,confirmationMessage:form.confirmationMessage,createdAt:form.createdAt,updatedAt:form.updatedAt,privacyNotice:form.privacyNotice } }, { headers: noStore });
+  return Response.json({ activity, form: { id:form.id,activityId:form.activityId,title:form.title,description:form.description,image:form.image,status:form.status,fields:form.fields,submitLabel:form.submitLabel,confirmationMessage:form.confirmationMessage,createdAt:form.createdAt,updatedAt:form.updatedAt,privacyNotice:form.privacyNotice } }, { headers: noStore });
 }
 
 export async function POST(request: Request, context: { params: Promise<{ slug: string }> }) {

@@ -3,12 +3,14 @@
 import { Dispatch, DragEvent, SetStateAction, useState } from "react";
 import type { RegistrationField, RegistrationFieldType } from "./registration-types";
 import "./registration-builder.css";
+import RegistrationImageUpload from "./registration-image";
 
 export type RegistrationBuilderProps = {
   fields: RegistrationField[];
   setFields: Dispatch<SetStateAction<RegistrationField[]>>;
   locked: boolean;
   busy: boolean;
+  onImageProcessing?: (busy: boolean) => void;
 };
 
 const fieldTypes: Array<[RegistrationFieldType, string]> = [
@@ -74,12 +76,16 @@ function AnswerPreview({ field }: { field: RegistrationField }) {
   return <input aria-label={`${fieldTypes.find(([value]) => value === type)?.[1] ?? "文字"}回答預覽`} type={inputType} disabled placeholder={placeholder} />;
 }
 
-export default function RegistrationBuilder({ fields, setFields, locked, busy }: RegistrationBuilderProps) {
+export default function RegistrationBuilder({ fields, setFields, locked, busy, onImageProcessing }: RegistrationBuilderProps) {
   const [dragged, setDragged] = useState<number | null>(null);
   const disabled = locked || busy;
 
   const update = (id: string, patch: Partial<RegistrationField>) => {
     if (disabled) return;
+    setFields((rows) => rows.map((row) => row.id === id ? { ...row, ...patch } : row));
+  };
+  const updatePresentation = (id: string, patch: Pick<Partial<RegistrationField>, "image" | "helpText">) => {
+    if (busy) return;
     setFields((rows) => rows.map((row) => row.id === id ? { ...row, ...patch } : row));
   };
 
@@ -137,7 +143,7 @@ export default function RegistrationBuilder({ fields, setFields, locked, busy }:
   };
 
   return <section className="registration-builder" aria-label="報名表問題編輯器" aria-busy={busy}>
-    {locked && <p className="registration-builder-locked" role="status">表單目前已鎖定，問題只能查看。</p>}
+    {locked && <p className="registration-builder-locked" role="status">已有報名資料，回答結構已鎖定；仍可更新問題詳細說明與圖片。</p>}
     <ol className="registration-builder-list">
       {fields.map((field, index) => <li
         className={`registration-builder-card${dragged === index ? " dragging" : ""}`}
@@ -173,6 +179,9 @@ export default function RegistrationBuilder({ fields, setFields, locked, busy }:
             </select>
           </label>
         </div>
+
+        <label className="registration-builder-help"><span>詳細說明</span><textarea rows={4} maxLength={10000} value={field.helpText ?? ""} disabled={busy} placeholder="補充文章、填答說明或個資使用說明" onChange={(event) => updatePresentation(field.id, { helpText: event.target.value })} /></label>
+        <RegistrationImageUpload label="問題圖片" value={field.image} disabled={busy} onProcessing={onImageProcessing} onChange={(image) => updatePresentation(field.id, { image })} />
 
         {isOptionField(field) && <fieldset className="registration-builder-options" disabled={disabled}>
           <legend>選項</legend>

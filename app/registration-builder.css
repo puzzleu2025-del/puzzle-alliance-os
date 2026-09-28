@@ -61,3 +61,10 @@
   .registration-builder-switches input[role="switch"],
   .registration-builder-switches input[role="switch"]::after { transition: none; }
 }
+
+.registration-builder-help textarea { width: 100%; min-height: 100px; font: inherit; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.registration-image-upload { display: grid; gap: 8px; min-width: 0; margin: 14px 0; }
+.registration-image-upload small { color: var(--muted); font-weight: 400; }
+.registration-image-upload p[role="alert"] { color: #a32f2f; margin: 0; }
+.registration-image-upload input[type="file"] { max-width: 100%; font: inherit; }
+.registration-image-upload button { justify-self: start; }

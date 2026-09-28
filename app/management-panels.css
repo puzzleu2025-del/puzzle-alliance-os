@@ -218,3 +218,6 @@
 @media (prefers-reduced-motion: reduce) {
   .mgmt-dialog { scroll-behavior: auto; }
 }
+
+.mgmt-history-toggle { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; color: var(--muted); font-size: .85rem; }
+.mgmt-history-toggle input { width: 18px; height: 18px; flex: 0 0 auto; }

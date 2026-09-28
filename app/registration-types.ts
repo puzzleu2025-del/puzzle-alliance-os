@@ -29,6 +29,7 @@ export type RegistrationField = {
   required: boolean;
   placeholder?: string;
   helpText?: string;
+  image?: string;
   options?: string[];
   min?: number;
   max?: number;
@@ -41,6 +42,7 @@ export type RegistrationForm = {
   activityId: string;
   title: string;
   description: string;
+  image?: string;
   status: RegistrationFormStatus;
   owner?: string;
   proxy?: string;
@@ -81,6 +83,51 @@ export type SubmissionValidation =
 const MAX_FIELDS = 100;
 const MAX_OPTIONS = 100;
 const MAX_TEXT = 10_000;
+export const REGISTRATION_ARTICLE_LIMIT = 20_000;
+export const REGISTRATION_IMAGE_BYTES = 256 * 1024;
+export const REGISTRATION_IMAGES_TOTAL_BYTES = 1024 * 1024;
+export const REGISTRATION_REQUEST_LIMIT = 2_000_000;
+
+/** Only bounded raster data URLs can be stored or rendered. Never accept remote URLs or SVG. */
+export function registrationImageBytes(value: unknown): number | null {
+  if (typeof value !== "string" || value.length > Math.ceil(REGISTRATION_IMAGE_BYTES / 3) * 4 + 40) return null;
+  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+  if (!match || match[2].length % 4) return null;
+  try {
+    const bytes = atob(match[2]);
+    if (!bytes.length || bytes.length > REGISTRATION_IMAGE_BYTES || btoa(bytes) !== match[2]) return null;
+    const signature = (start: number, codes: number[]) => codes.every((code, index) => bytes.charCodeAt(start + index) === code);
+    const uint32 = (start: number, littleEndian = false) => [0,1,2,3].reduce((number, index) => number + bytes.charCodeAt(start + index) * 2 ** (8 * (littleEndian ? index : 3 - index)), 0);
+    const valid = match[1] === "png" ? bytes.length >= 45 && signature(0, [137,80,78,71,13,10,26,10]) && uint32(8) === 13 && bytes.slice(12,16) === "IHDR" && uint32(16) > 0 && uint32(20) > 0 && uint32(16) * uint32(20) <= 40_000_000 && signature(bytes.length - 12, [0,0,0,0,73,69,78,68,174,66,96,130])
+      : match[1] === "jpeg" ? bytes.length >= 4 && signature(0, [255,216,255]) && signature(bytes.length - 2, [255,217])
+      : bytes.length >= 20 && bytes.slice(0,4) === "RIFF" && uint32(4, true) === bytes.length - 8 && bytes.slice(8,12) === "WEBP" && ["VP8 ", "VP8L", "VP8X"].includes(bytes.slice(12,16));
+    return valid ? bytes.length : null;
+  } catch { return null; }
+}
+
+export function registrationPresentationError(value: unknown): string | null {
+  if (!isRecord(value)) return "表單資料格式錯誤";
+  const fields = Array.isArray(value.fields) ? value.fields : [];
+  let total = 0;
+  for (const item of [value, ...fields]) {
+    if (!isRecord(item)) continue;
+    if (item.image !== undefined && item.image !== "") {
+      const bytes = registrationImageBytes(item.image);
+      if (bytes === null) return "圖片僅支援有效的 PNG、JPEG 或 WebP，每張上限 256 KB";
+      total += bytes;
+    }
+  }
+  if (total > REGISTRATION_IMAGES_TOTAL_BYTES) return "整份表單圖片合計不得超過 1 MB，請減少圖片或縮小圖片";
+  for (const key of ["description", "privacyNotice"] as const) {
+    if (value[key] !== undefined && (typeof value[key] !== "string" || value[key].length > REGISTRATION_ARTICLE_LIMIT)) return "表單說明與個資告知各不得超過 20,000 字";
+  }
+  if (fields.some((field) => isRecord(field) && field.helpText !== undefined && (typeof field.helpText !== "string" || field.helpText.length > MAX_TEXT))) return "問題詳細說明不得超過 10,000 字";
+  return null;
+}
+
+export function registrationAnswerStructure(fields: RegistrationField[]) {
+  return fields.map((field) => { const structure = { ...field }; delete structure.image; delete structure.helpText; return structure; });
+}
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phonePattern = /^\+?[0-9 ()-]{7,30}(?:\s*(?:#|x|ext\.?)[0-9]{1,8})?$/i;
@@ -140,7 +187,8 @@ export function normalizeRegistrationField(value: unknown, index = 0): Registrat
     type,
     required: value.required === true,
     placeholder: normalizeRegistrationText(value.placeholder, 300) || undefined,
-    helpText: normalizeRegistrationText(value.helpText, 1_000) || undefined,
+    helpText: normalizeRegistrationText(value.helpText, MAX_TEXT) || undefined,
+    image: registrationImageBytes(value.image) !== null ? value.image as string : undefined,
     options: ["single_choice", "multiple_choice", "select", "radio", "checkbox"].includes(type)
       ? options
       : undefined,
@@ -172,7 +220,8 @@ export function normalizeRegistrationForm(value: unknown): RegistrationForm | nu
     id,
     activityId,
     title,
-    description: normalizeRegistrationText(value.description, 5_000),
+    description: normalizeRegistrationText(value.description, REGISTRATION_ARTICLE_LIMIT),
+    image: registrationImageBytes(value.image) !== null ? value.image as string : undefined,
     status,
     owner: normalizeRegistrationText(value.owner, 100) || undefined,
     proxy: normalizeRegistrationText(value.proxy, 100) || undefined,
@@ -181,7 +230,7 @@ export function normalizeRegistrationForm(value: unknown): RegistrationForm | nu
     confirmationMessage: normalizeRegistrationText(value.confirmationMessage, 1_000) || undefined,
     createdAt: normalizeRegistrationText(value.createdAt, 40) || new Date(0).toISOString(),
     updatedAt: normalizeRegistrationText(value.updatedAt, 40) || undefined,
-    privacyNotice: normalizeRegistrationText(value.privacyNotice, 5_000),
+    privacyNotice: normalizeRegistrationText(value.privacyNotice, REGISTRATION_ARTICLE_LIMIT),
     slug: normalizeRegistrationId(value.slug) || undefined,
     version: finiteNumber(value.version),
   };

@@ -196,7 +196,10 @@ def plan(root, ident, contract_path):
     require(isinstance(c["ALLOWED_SCOPE"], dict) and c["ALLOWED_SCOPE"], "EXACT_ALLOWLIST_REQUIRED")
     for name, reason in c["ALLOWED_SCOPE"].items():
         safe(root, name)
-        require(not any(x in name for x in "*?[") and isinstance(reason, str) and reason.strip(), "EXACT_FILE_REASON_REQUIRED")
+        # Next-style route directories may contain literal brackets. Accept them
+        # only for an existing exact file; never interpret an allowlist as a glob.
+        literal_brackets = "[" not in name or (root / name).is_file()
+        require(not any(x in name for x in "*?") and literal_brackets and isinstance(reason, str) and reason.strip(), "EXACT_FILE_REASON_REQUIRED")
         protected = any(fnmatch.fnmatchcase(name, pat) for pat in task["policy"]["protected"])
         if protected:
             require(c["protected_exceptions"].get(name, {}).get("user_authorization"), "PROTECTED_SCOPE:" + name)

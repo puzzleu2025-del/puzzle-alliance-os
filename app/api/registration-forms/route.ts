@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { csrfError, getMember, randomToken } from "@/app/admin-auth";
-import { normalizeRegistrationForm, normalizeRegistrationText, type RegistrationForm, type RegistrationPaymentStatus, type RegistrationSubmission } from "@/app/registration-types";
+import { normalizeRegistrationForm, normalizeRegistrationText, registrationPresentationError, registrationAnswerStructure, REGISTRATION_REQUEST_LIMIT, type RegistrationForm, type RegistrationPaymentStatus, type RegistrationSubmission } from "@/app/registration-types";
 
 export const dynamic = "force-dynamic";
 const noStore = { "Cache-Control": "private, no-store" };
@@ -70,7 +70,9 @@ export async function POST(request: Request) {
   const csrf = csrfError(request); if (csrf) return csrf;
   const auth = await authorize(); if (auth.error) return auth.error;
   let raw: unknown;
-  try { const text = await request.text(); if (text.length > 100_000) throw new Error(); raw = JSON.parse(text); } catch { return Response.json({ error: "表單資料格式錯誤" }, { status: 400, headers: noStore }); }
+  try { const text = await request.text(); if (new TextEncoder().encode(text).byteLength > REGISTRATION_REQUEST_LIMIT) return Response.json({ error: "表單資料過大，請縮小圖片或減少說明內容" }, { status: 413, headers: noStore }); raw = JSON.parse(text); } catch { return Response.json({ error: "表單資料格式錯誤" }, { status: 400, headers: noStore }); }
+  const presentationError = registrationPresentationError((raw as { form?: unknown })?.form);
+  if (presentationError) return Response.json({ error: presentationError }, { status: 400, headers: noStore });
   const form = normalizeRegistrationForm((raw as { form?: unknown })?.form);
   if (!form || !form.fields.length) return Response.json({ error: "至少需要一個有效問題" }, { status: 400, headers: noStore });
   const access = await activityAccess(form.activityId, auth.user!);
@@ -87,7 +89,7 @@ export async function POST(request: Request) {
   if (existing) {
     const responseCount = await env.DB!.prepare("SELECT COUNT(*) AS count FROM registration_submissions WHERE form_id=?").bind(existing.id).first<{count:number}>();
     let schemaChanged = true;
-    try { schemaChanged = JSON.stringify(rowToForm({ id:existing.id, activityId:form.activityId, slug:existing.slug, version:existing.version, schemaJson:existing.schemaJson })?.fields ?? []) !== JSON.stringify(form.fields); } catch {}
+    try { schemaChanged = JSON.stringify(registrationAnswerStructure(rowToForm({ id:existing.id, activityId:form.activityId, slug:existing.slug, version:existing.version, schemaJson:existing.schemaJson })?.fields ?? [])) !== JSON.stringify(registrationAnswerStructure(form.fields)); } catch {}
     if ((responseCount?.count ?? 0) > 0 && schemaChanged) return Response.json({ error: "已有報名資料，問題結構已鎖定；仍可調整說明、狀態與個資告知" }, { status: 409, headers: noStore });
   }
   const now = new Date().toISOString();

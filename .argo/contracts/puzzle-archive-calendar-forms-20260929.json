@@ -1,0 +1,183 @@
+{
+  "REQUESTED_CHANGE": "使用者要求結束活动/會議自動收起且管理員可查看歷史，減少已完成任務堆積；手機月曆不需左右滑動；活動任務可提前但不能晚於所屬階段週期限，見習總召可設定獲授權活動 Deadline；報名表主題/題目可上傳圖片與詳細長文。",
+  "ALLOWED_SCOPE": {
+    ".argo/contracts/puzzle-archive-calendar-forms-20260929.json": "本次 exact-file 合約",
+    "app/record-visibility.ts": "共用結束狀態判定，僅 UI 收起不刪資料",
+    "app/task-deadlines.ts": "純函式計算階段截止上限供 API 與介面一致驗證",
+    "app/management-panels.tsx": "活動/任務/會議歷史切換與任務期限欄位",
+    "app/management-panels.css": "僅歷史切換局部樣式",
+    "app/calendar-panel.tsx": "隱藏結束項目、管理員歷史切換、日期上限提示",
+    "app/calendar-panel.css": "月曆七欄適應裝置，局部手機密度與換行",
+    "app/workspace.tsx": "dashboard 歷史收起與拖拉改期限制，保留完整保存資料",
+    "app/api/workspace/route.ts": "所有任務新增/改期/編輯路徑伺服器期限驗證，保留既有權責與 CAS",
+    "app/registration-types.ts": "圖片/長文額外 schema 與嚴格 raster 資料驗證",
+    "app/registration-image.tsx": "限定尺寸的 raster 上傳與預覽元件",
+    "app/registration-builder.tsx": "題目圖片與詳細說明設定",
+    "app/registration-builder.css": "題目圖片與長文局部樣式",
+    "app/registration-panel.tsx": "主題圖片與長文編輯及預覽",
+    "app/registration-panel.css": "主題圖片與長文局部樣式",
+    "app/registration-public.tsx": "公開填寫頁圖片及文章換行呈現，不改答案與個資權限",
+    "app/api/registration-forms/route.ts": "有界表單圖片 payload 與驗證，歷史填答結構保留",
+    "tests/feature/archive-calendar-forms.mjs": "隔離 D1/browser 功能驗收",
+    "scripts/argo/govern.py": "只修正實際存在完整列名的 bracket 路徑誤判，仍禁止 glob",
+    "tests/argo/test_govern.py": "驗證 literal [slug] 可列入與不存在 bracket/glob 被拒絕",
+    "app/api/public/registrations/[slug]/route.ts": "公開報名 API 回傳主題圖片，匿名跨裝置可讀已驗證圖片"
+  },
+  "PROTECTED_SCOPE": [
+    "Login/Auth",
+    "app/page.tsx",
+    "app/layout.tsx",
+    "Global CSS/Theme",
+    "DB/schema/migrations",
+    "Environment",
+    "Deployment configuration",
+    "dependencies/config",
+    "governance",
+    "members",
+    "export",
+    "docs/argo_audit.md"
+  ],
+  "EXPECTED_SIDE_EFFECTS": [
+    "結束項目自動於 UI 收起，管理員可顯示歷史，原資料及完整 CAS 保存不變",
+    "結束狀態或已過籌備結束日/會議結束時間視為歷史；不以單一活動日隱藏尚在收尾的活動",
+    "階段週上限以活動日反推，階段手動 due 只能收緊任務截止上限，管理員可調整活動日；既有未變更超期資料不清除",
+    "見習總召在獲授權且未提交鎖定的活動可制定 Deadline，保留提交後管理員修改規則",
+    "圖片以有界 PNG/JPEG/WebP data URL 保存於原 schema_json，不新增儲存服務/資料遷移；文字作 plain text 保留換行，拒絕 SVG/HTML"
+  ],
+  "acceptance": [
+    "管理員可查看結束活動/會議/任務，非管理員無歷史開關，未結束項目不誤藏且原資料不刪",
+    "320/375/390/768/桌機月曆七欄不橫向溢出，選日與改期確認保留",
+    "API 與 UI 新增/編輯/拖拉/手動改期皆拒絕超過 phase week due，提前有效；見習總召自己的授權活動可制定 Deadline、其他活動與提交後拒絕",
+    "主題與題目圖片及長文跨重新載入保存並公開顯示；拒絕無效/超限/危險圖片；已有填答結構和個資/匯出權限保持",
+    "完整 diff、隔離 app startup/Login/Logout/Navigation/RBAC/主要相鄰頁/console/network/responsive 與独立 reviewer PASS"
+  ],
+  "executor": "root-api-executor + operations-ui-executor + registration-executor",
+  "reviewer": "independent-reviewer-20260929",
+  "protected_exceptions": {
+    "app/management-panels.tsx": {
+      "user_authorization": "結束項目收起與任務期限介面"
+    },
+    "app/management-panels.css": {
+      "user_authorization": "收起與歷史切換局部樣式"
+    },
+    "app/calendar-panel.tsx": {
+      "user_authorization": "月曆收起結束項目與期限限制"
+    },
+    "app/calendar-panel.css": {
+      "user_authorization": "手機月曆隨裝置適應"
+    },
+    "app/workspace.tsx": {
+      "user_authorization": "避免活動/會議/任務堆積與拖拉改期期限，僅 dashboard/filter/reschedule 區域"
+    },
+    "app/api/workspace/route.ts": {
+      "user_authorization": "不可延後超過階段週上限及見習總召 Deadline 權責"
+    },
+    "app/api/registration-forms/route.ts": {
+      "user_authorization": "報名圖片與詳細敘述可保存需有界 payload 與驗證"
+    },
+    "app/record-visibility.ts": {
+      "user_authorization": "共用結束狀態判定，僅 UI 收起不刪資料；本次使用者明確要求之功能所需"
+    },
+    "app/task-deadlines.ts": {
+      "user_authorization": "純函式計算階段截止上限供 API 與介面一致驗證；本次使用者明確要求之功能所需"
+    },
+    "app/registration-types.ts": {
+      "user_authorization": "圖片/長文額外 schema 與嚴格 raster 資料驗證；本次使用者明確要求之功能所需"
+    },
+    "app/registration-image.tsx": {
+      "user_authorization": "限定尺寸的 raster 上傳與預覽元件；本次使用者明確要求之功能所需"
+    },
+    "app/registration-builder.tsx": {
+      "user_authorization": "題目圖片與詳細說明設定；本次使用者明確要求之功能所需"
+    },
+    "app/registration-builder.css": {
+      "user_authorization": "題目圖片與長文局部樣式；本次使用者明確要求之功能所需"
+    },
+    "app/registration-panel.tsx": {
+      "user_authorization": "主題圖片與長文編輯及預覽；本次使用者明確要求之功能所需"
+    },
+    "app/registration-panel.css": {
+      "user_authorization": "主題圖片與長文局部樣式；本次使用者明確要求之功能所需"
+    },
+    "app/registration-public.tsx": {
+      "user_authorization": "公開填寫頁圖片及文章換行呈現，不改答案與個資權限；本次使用者明確要求之功能所需"
+    },
+    "scripts/argo/govern.py": {
+      "user_authorization": "使用者 2026-09-29 回覆授權這個檢查修正，僅允許存在完整列名 [slug] 檔案、仍禁止萬用字元範圍"
+    },
+    "app/api/public/registrations/[slug]/route.ts": {
+      "user_authorization": "使用者明確要求報名主題及題目圖片功能；另已明確授權治理接受實際存在的完整 bracket 檔名"
+    }
+  },
+  "checks": {
+    "governance": {
+      "argv": [
+        "C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/argo",
+        "-p",
+        "test_govern.py",
+        "-v"
+      ],
+      "timeout": 180
+    },
+    "typecheck": {
+      "argv": [
+        "node",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "timeout": 180
+    },
+    "lint": {
+      "argv": [
+        "node",
+        "node_modules/eslint/bin/eslint.js",
+        "app/management-panels.tsx",
+        "app/calendar-panel.tsx",
+        "app/workspace.tsx",
+        "app/api/workspace/route.ts",
+        "app/registration-types.ts",
+        "app/registration-image.tsx",
+        "app/registration-panel.tsx",
+        "app/registration-builder.tsx",
+        "app/registration-public.tsx",
+        "app/api/registration-forms/route.ts",
+        "app/record-visibility.ts",
+        "app/task-deadlines.ts"
+      ],
+      "timeout": 180
+    },
+    "build": {
+      "argv": [
+        "node",
+        "scripts/run-framework.mjs",
+        "build"
+      ],
+      "timeout": 600
+    },
+    "application_regression": {
+      "argv": [
+        "node",
+        "scripts/argo/regression.mjs",
+        "--repo=.",
+        "--out=work/a929",
+        "--compare=work/b929",
+        "--allow-changed=admin-activities-desktop,admin-activities-mobile,admin-dashboard-desktop,admin-dashboard-mobile,member-dashboard-desktop"
+      ],
+      "timeout": 300
+    },
+    "feature_regression": {
+      "argv": [
+        "node",
+        "tests/feature/archive-calendar-forms.mjs",
+        "--repo=.",
+        "--out=work/f929"
+      ],
+      "timeout": 360
+    }
+  }
+}

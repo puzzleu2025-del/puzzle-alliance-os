@@ -10,6 +10,8 @@ import {
   useState,
 } from "react";
 import "./management-panels.css";
+import { activityEnded, meetingEnded, taskEnded, canViewHistory } from "./record-visibility";
+import { taskDeadlineLimit, taskDeadlineError } from "./task-deadlines";
 import type { RegistrationForm, RegistrationSubmission } from "./registration-types";
 import MemberSelect, { MemberMultiSelect, type MemberOption } from "./member-select";
 
@@ -431,6 +433,8 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
   const [submitting, setSubmitting] = useState(false);
   const [failed, setFailed] = useState(false);
 
+  const [showHistory, setShowHistory] = useState(false);
+  const visibleActivities = data.activities.filter((activity) => (canViewHistory(userRole) && showHistory) || !activityEnded(activity));
   const canManageAll = ["admin", "manager"].includes(userRole ?? "");
   const canEditActivity = (activity: Activity) => canConfigureActivity(activity, userId, userName, userRole);
   const submit = async (event: FormEvent<HTMLFormElement>, original?: Activity) => {
@@ -481,6 +485,10 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
         due: !task.manualDue && task.due === before.due ? after.due : task.due,
       };
     }) : data.tasks;
+    if (original && original.date !== item.date) {
+      const invalid = tasks.find((task) => task.activityId === item.id && taskDeadlineError(task, item));
+      if (invalid) { window.alert(`「${invalid.name}」${taskDeadlineError(invalid, item)}。請先調整任務日期。`); return; }
+    }
     setSubmitting(true);
     setFailed(false);
     const saved = await onSave(
@@ -504,6 +512,10 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
       return;
     }
     const updated: Activity = { ...detail, phasePlans: { ...detail.phasePlans, [editingPhase]: { startDate, due, progress: Number(field(form, "progress")), notes: field(form, "notes"), owner: field(form, "owner"), proxy: field(form, "proxy") } } };
+    if (due !== activityPhaseSchedule(detail, editingPhase)?.due) {
+      const invalid = data.tasks.find((task) => task.activityId === detail.id && task.phaseId === editingPhase && taskDeadlineError(task, updated));
+      if (invalid) { window.alert(`「${invalid.name}」${taskDeadlineError(invalid, updated)}。請先調整任務日期。`); return; }
+    }
     setSubmitting(true); setFailed(false);
     const saved = await onSave({ ...data, activities: data.activities.map((row) => row.id === updated.id ? updated : row) }, "edit_phase");
     setSubmitting(false);
@@ -521,9 +533,10 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
           ＋ 建立活動
         </button>}
       </div>
-      {data.activities.length ? (
+      {canManageAll && <label className="mgmt-history-toggle"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />顯示已結束活動</label>}
+      {visibleActivities.length ? (
         <div className="mgmt-activity-grid">
-          {data.activities.map((activity) => {
+          {visibleActivities.map((activity) => {
             const progress = activityProgress(activity, data.tasks);
             return (
               <article className="mgmt-activity-card" key={activity.id}>
@@ -617,9 +630,11 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [submitting, setSubmitting] = useState(false);
   const [failed, setFailed] = useState(false);
-  const owners = unique(data.tasks.map((task) => task.assignee));
-  const statuses = unique(data.tasks.map((task) => task.status));
-  const filtered = data.tasks.filter(
+  const [showHistory, setShowHistory] = useState(false);
+  const taskRows = data.tasks.filter((task) => (canViewHistory(userRole) && showHistory) || !taskEnded(task, data.activities));
+  const owners = unique(taskRows.map((task) => task.assignee));
+  const statuses = unique(taskRows.map((task) => task.status));
+  const filtered = taskRows.filter(
     (task) =>
       (activityFilter === "all" || task.activityId === activityFilter) &&
       (statusFilter === "all" || task.status === statusFilter) &&
@@ -632,11 +647,13 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
     const phaseId = (form.elements.namedItem("phaseId") as HTMLSelectElement | null)?.value;
     const activity = data.activities.find((row) => row.id === activityId);
     const schedule = activityPhaseSchedule(activity, phaseId ?? "");
+    const dueField = form.elements.namedItem("due") as HTMLInputElement | null;
+    if (dueField) { dueField.max = taskDeadlineLimit(activity, phaseId ?? ""); dueField.setCustomValidity(""); }
     if (!schedule) return;
     const startInput = form.elements.namedItem("startDate") as HTMLInputElement | null;
     const dueInput = form.elements.namedItem("due") as HTMLInputElement | null;
     if (startInput) startInput.value = schedule.startDate;
-    if (dueInput) dueInput.value = schedule.due;
+    if (dueInput) dueInput.value = taskDeadlineLimit(activity, phaseId ?? "") || schedule.due;
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -681,6 +698,8 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
       progressPercent: status === "完成" ? 100 : Number(field(form, "progressPercent")) || 0,
       dependencies: form.getAll("dependencies").map(String).filter(Boolean),
     };
+    const deadlineError = taskDeadlineError(item, data.activities.find((activity) => activity.id === item.activityId));
+    if (deadlineError) { const input = event.currentTarget.elements.namedItem("due") as HTMLInputElement; input.setCustomValidity(deadlineError); input.reportValidity(); input.addEventListener("input", () => input.setCustomValidity(""), { once: true }); return; }
     setSubmitting(true);
     setFailed(false);
     const saved = await onSave({ ...data, tasks: [...data.tasks, item] }, "create_task");
@@ -746,6 +765,8 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
       manualDue: editing.manualDue || due !== editing.due,
       progressPercent: status === "完成" ? 100 : Number(field(form, "progressPercent")) || 0,
     };
+    const deadlineError = taskDeadlineError(item, data.activities.find((activity) => activity.id === item.activityId));
+    if (deadlineError && (item.due !== editing.due || item.startDate !== editing.startDate || item.phaseId !== editing.phaseId || item.activityId !== editing.activityId)) { const input = event.currentTarget.elements.namedItem("due") as HTMLInputElement; input.setCustomValidity(deadlineError); input.reportValidity(); input.addEventListener("input", () => input.setCustomValidity(""), { once: true }); return; }
     setSubmitting(true); setFailed(false);
     const saved = await onSave({ ...data, tasks: data.tasks.map((row) => row.id === item.id ? item : row) }, "edit_task");
     setSubmitting(false);
@@ -770,6 +791,7 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
         <div><h2>任務中心</h2><p className="muted">依活動、狀態與主責篩選，清楚保留職務代理與下一手。</p></div>
         {configurableActivities.length > 0 && <button className="primary" onClick={() => { setFailed(false); setCreating(true); }}>＋ 建立任務</button>}
       </div>
+      {canViewHistory(userRole) && <label className="mgmt-history-toggle"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />顯示已結束／完成任務</label>}
       <div className="mgmt-filters" aria-label="任務篩選">
         <label>活動<select value={activityFilter} onChange={(event) => setActivityFilter(event.target.value)}><option value="all">全部活動</option>{data.activities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
         <label>狀態<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">全部狀態</option>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
@@ -798,7 +820,7 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
         <label>任務職務<input name="jobRole" maxLength={100} placeholder="例：場務組長" /></label>
         <label>下一手<MemberSelect name="nextOwner" members={memberOptions} /></label>
         <label>開始日期<input name="startDate" type="date" /><small>依活動日與階段自動帶入，可微調。</small></label>
-        <label>Deadline<input name="due" type="date" required /><small>儲存後會自動出現在行事曆。</small></label>
+        <label>Deadline<input name="due" type="date" required /><small>可提前完成，不可晚於所屬階段週的期限。</small></label>
         <label>優先級<select name="priority" defaultValue="一般"><option>緊急</option><option>高</option><option>一般</option><option>低</option></select></label>
         <label>完成率（%）<input name="progressPercent" type="number" min="0" max="100" step="1" defaultValue="0" required /></label>
         <label>預估工時<input name="effortHours" type="number" min="0" max="10000" step="0.5" /></label>
@@ -815,7 +837,7 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
         {canEditAllTaskFields(editing) && <>
           <label className="mgmt-span-2">任務名稱<input name="name" required maxLength={200} defaultValue={editing.name} autoFocus /></label>
           <label>所屬活動<select name="activityId" defaultValue={editing.activityId} required onChange={(event) => applyPhaseSchedule(event.currentTarget.form!)}>{configurableActivities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
-          <label>階段<select name="phaseId" defaultValue={editing.phaseId} onChange={(event) => applyPhaseSchedule(event.currentTarget.form!)}><option value="">未分階段</option>{PHASES.map((phase) => <option value={phase.id} key={phase.id}>{phase.id} {phase.name}</option>)}</select></label>
+          <label>階段<select name="phaseId" defaultValue={editing.phaseId} onChange={(event) => applyPhaseSchedule(event.currentTarget.form!)}><option value="" disabled={Boolean(editing.phaseId)}>未分階段（改期前需選擇）</option>{PHASES.map((phase) => <option value={phase.id} key={phase.id}>{phase.id} {phase.name}</option>)}</select></label>
           <label>主責<MemberSelect name="assignee" members={memberOptions} defaultValue={editing.assignee} required /></label>
           <label>職務代理<MemberSelect name="proxy" members={memberOptions} defaultValue={editing.proxy} /></label>
           <label className="mgmt-span-2">協作人員<MemberMultiSelect name="collaborators" members={memberOptions} defaultValues={editing.collaborators} /><small>可按 Ctrl／⌘ 選取多位。</small></label>
@@ -830,7 +852,7 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
         <label>狀態<select name="status" defaultValue={editing.status}><option>待處理</option><option>進行中</option><option>等待回覆</option><option>待審核</option><option>完成</option><option>不適用</option></select></label>
         <label>完成率（%）<input name="progressPercent" type="number" min="0" max="100" step="1" required defaultValue={taskProgress(editing)} /></label>
         <label>開始日期<input name="startDate" type="date" defaultValue={editing.startDate} /></label>
-        <label>Deadline<input name="due" type="date" required defaultValue={editing.due} /></label>
+        <label>Deadline<input name="due" type="date" required max={taskDeadlineLimit(data.activities.find((activity) => activity.id === editing.activityId), editing.phaseId) ? [taskDeadlineLimit(data.activities.find((activity) => activity.id === editing.activityId), editing.phaseId), editing.due].sort().at(-1) : undefined} defaultValue={editing.due} /></label>
         <label className="mgmt-span-2">卡點／備註<textarea name="blocker" maxLength={5000} defaultValue={editing.blocker} /></label>
       </fieldset><div className="mgmt-dialog-actions"><button type="button" onClick={() => setEditing(null)} disabled={submitting || busy}>取消</button><button className="primary" type="submit" disabled={submitting || busy}>儲存任務變更</button></div></form></Dialog>}
     </>
@@ -859,6 +881,8 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const visibleMeetings = data.meetings.filter((meeting) => (canViewHistory(userRole) && showHistory) || !meetingEnded(meeting));
   const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userName, userRole));
   const canEditMeeting = (meeting: Meeting) => canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userName, userRole);
   const canManageAttendance = ["admin", "manager"].includes(userRole ?? "");
@@ -965,7 +989,8 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
   return <>
     <div className="page-heading"><div><h2>會議協調</h2><p className="muted">主持、記錄、議程、地點與出席回覆放在同一張會議卡。</p></div>{configurableActivities.length > 0 && <button className="primary" onClick={() => { setFailed(false); setCreating(true); }}>＋ 安排會議</button>}</div>
     {failed && !creating && <FormStatus failed />}
-    {data.meetings.length ? <div className="mgmt-meeting-grid">{data.meetings.map((meeting) => { const stats = attendance(meeting); const responseRows = meetingResponses(meeting); const link = safeMeetingUrl(meeting.meetingLink); return <article className="mgmt-meeting-card" key={meeting.id}><div className="mgmt-card-head"><span className={`badge${meeting.status === "已確認" ? " green" : ""}`}>{meeting.status}</span><span>{meeting.type || "工作會議"}</span></div><h3>{meeting.title}</h3><p className="muted">{activityName(data, meeting.activityId)}</p><dl className="mgmt-compact-list"><div><dt>開始</dt><dd>{dateLabel(meeting.time)}</dd></div><div><dt>結束</dt><dd>{dateLabel(meeting.endTime)}</dd></div><div><dt>主持</dt><dd>{meeting.organizer || "未指派"}</dd></div><div><dt>記錄</dt><dd>{meeting.recorder || "未指派"}</dd></div><div><dt>地點</dt><dd>{meeting.location || "未設定"}</dd></div><div><dt>線上連結</dt><dd>{link ? <a href={link} target="_blank" rel="noreferrer">開啟會議連結</a> : "未設定"}</dd></div><div><dt>出席回覆</dt><dd>{stats.attending} 出席／{stats.pending} 待回覆／共 {stats.total}</dd></div></dl>{responseRows.length ? <section className="mgmt-attendance"><small>逐人回覆</small>{responseRows.map((person) => <label key={person.name}><span>{person.name}</span><select aria-label={`${person.name}的出席回覆`} value={person.response} disabled={submitting || busy || (!canManageAttendance && (!uniqueSelfName || person.name.trim() !== userName.trim()))} onChange={(event) => void updateResponse(meeting, person.name, event.target.value as MeetingAttendee["response"])}><option>待回覆</option><option>出席</option><option>可能出席</option><option>不出席</option></select></label>)}</section> : null}<section className="mgmt-agenda"><small>議程</small><p>{meeting.agenda || "尚未加入議程。"}</p></section>{meeting.status !== "已確認" && canEditMeeting(meeting) && <button className="mgmt-wide-button" disabled={submitting || busy} onClick={() => void confirm(meeting)}>{submitting || busy ? "儲存中…" : "確認會議（保留回覆）"}</button>}{canEditMeeting(meeting) && <button className="mgmt-wide-button" onClick={() => { setFailed(false); setEditing(meeting); }}>編輯會議</button>}</article>; })}</div> : <div className="empty">還沒有會議。需要同步決策時再安排即可。</div>}
+    {canManageAttendance && <label className="mgmt-history-toggle"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />顯示已結束會議</label>}
+    {visibleMeetings.length ? <div className="mgmt-meeting-grid">{visibleMeetings.map((meeting) => { const stats = attendance(meeting); const responseRows = meetingResponses(meeting); const link = safeMeetingUrl(meeting.meetingLink); return <article className="mgmt-meeting-card" key={meeting.id}><div className="mgmt-card-head"><span className={`badge${meeting.status === "已確認" ? " green" : ""}`}>{meeting.status}</span><span>{meeting.type || "工作會議"}</span></div><h3>{meeting.title}</h3><p className="muted">{activityName(data, meeting.activityId)}</p><dl className="mgmt-compact-list"><div><dt>開始</dt><dd>{dateLabel(meeting.time)}</dd></div><div><dt>結束</dt><dd>{dateLabel(meeting.endTime)}</dd></div><div><dt>主持</dt><dd>{meeting.organizer || "未指派"}</dd></div><div><dt>記錄</dt><dd>{meeting.recorder || "未指派"}</dd></div><div><dt>地點</dt><dd>{meeting.location || "未設定"}</dd></div><div><dt>線上連結</dt><dd>{link ? <a href={link} target="_blank" rel="noreferrer">開啟會議連結</a> : "未設定"}</dd></div><div><dt>出席回覆</dt><dd>{stats.attending} 出席／{stats.pending} 待回覆／共 {stats.total}</dd></div></dl>{responseRows.length ? <section className="mgmt-attendance"><small>逐人回覆</small>{responseRows.map((person) => <label key={person.name}><span>{person.name}</span><select aria-label={`${person.name}的出席回覆`} value={person.response} disabled={submitting || busy || (!canManageAttendance && (!uniqueSelfName || person.name.trim() !== userName.trim()))} onChange={(event) => void updateResponse(meeting, person.name, event.target.value as MeetingAttendee["response"])}><option>待回覆</option><option>出席</option><option>可能出席</option><option>不出席</option></select></label>)}</section> : null}<section className="mgmt-agenda"><small>議程</small><p>{meeting.agenda || "尚未加入議程。"}</p></section>{meeting.status !== "已確認" && canEditMeeting(meeting) && <button className="mgmt-wide-button" disabled={submitting || busy} onClick={() => void confirm(meeting)}>{submitting || busy ? "儲存中…" : "確認會議（保留回覆）"}</button>}{canEditMeeting(meeting) && <button className="mgmt-wide-button" onClick={() => { setFailed(false); setEditing(meeting); }}>編輯會議</button>}</article>; })}</div> : <div className="empty">還沒有會議。需要同步決策時再安排即可。</div>}
     {creating && <Dialog title="安排會議" close={() => !submitting && !busy && setCreating(false)} wide><form onSubmit={submit}><FormStatus failed={failed} /><fieldset disabled={submitting || busy} className="mgmt-form-grid">
       <label className="mgmt-span-2">會議名稱<input name="title" required maxLength={200} autoFocus /></label>
       <label>所屬活動<select name="activityId" required><option value="">請選擇活動</option>{configurableActivities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>

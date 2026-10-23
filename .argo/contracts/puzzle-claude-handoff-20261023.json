@@ -1,0 +1,39 @@
+{
+  "REQUESTED_CHANGE": "2026-10-23 使用者要求將拼圖聯盟 OS 的授權、專案內容與進度轉交 Claude Code，製作可讀、可核對的接手文件。",
+  "ALLOWED_SCOPE": {
+    ".argo/contracts/puzzle-claude-handoff-20261023.json": "記錄本次交接的 exact-file 範圍、驗收與檢查命令。",
+    "docs/claude_code_handoff_20261023.md": "交付 Claude Code 可直接讀取的授權邊界、架構、現況、證據與接手順序。"
+  },
+  "PROTECTED_SCOPE": [
+    "app/**", "components/**", "preview/**", "hooks/**", "lib/**", "db/**", "drizzle/**",
+    "*.css", "**/*.css", ".github/**", ".openai/**", "build/**", "package*.json",
+    "*config*", "cloudflare-env.d.ts", ".env*", "AGENTS.md", ".argo/policy.json",
+    "scripts/**", ".codex/**", ".githooks/**", "docs/argo_audit.md"
+  ],
+  "EXPECTED_SIDE_EFFECTS": [
+    "新增交接文件與本次任務合約；不改應用行為或既有未追蹤的 docs/argo_audit.md。",
+    "記憶完成 Gate 若通過，會以現有單一 vault 追加本次交接紀錄並 CAS 更新目前狀態。"
+  ],
+  "acceptance": [
+    "交接文件涵蓋使用者本次授權的範圍與限制、專案根目錄與 Git 基準、架構與來源、已完成與未完成、歷史驗證與今日未驗證的區別。",
+    "無密碼、token、秘密環境變數值與正式個資；不宣稱已直接通知 Claude Code。",
+    "完整差異只含本次兩個檔案，保留既有 docs/argo_audit.md；獨立 reviewer 閱讀交接內容與 diff。"
+  ],
+  "executor": "root",
+  "reviewer": "bench_handoff",
+  "protected_exceptions": {},
+  "checks": {
+    "governance": {
+      "argv": ["C:/Users/kuen/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe", "-m", "unittest", "discover", "-s", "tests/argo", "-p", "test_govern.py", "-v"],
+      "timeout": 180
+    },
+    "build": {
+      "argv": ["node", "scripts/run-framework.mjs", "build"],
+      "timeout": 600
+    },
+    "application_regression": {
+      "argv": ["node", "scripts/argo/regression.mjs", "--repo=.", "--out=work/ha", "--compare=work/hb"],
+      "timeout": 300
+    }
+  }
+}

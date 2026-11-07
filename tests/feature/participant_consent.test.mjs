@@ -57,7 +57,7 @@ function fixture() {
   const path = join(dir, "test.sqlite");
   const sqlite = new DatabaseSync(path);
   sqlite.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000");
-  for (const migration of readdirSync("drizzle").filter((name) => /^000[0-9].*[.]sql$/.test(name)).sort()) {
+  for (const migration of readdirSync("drizzle").filter((name) => /^00(?:0[0-9]|10).*[.]sql$/.test(name)).sort()) {
     sqlite.exec(readFileSync("drizzle/" + migration, "utf8"));
   }
   return {
@@ -112,14 +112,14 @@ test("unchecked, malformed, expired, wrong token and changed version leave no mu
     assert.deepEqual(pending.terms, { version: "v1", content: "Published terms one" });
     assert.equal(f.sqlite.prepare("SELECT token_hash FROM participant_pending_identities").get().token_hash, hash(pending.token));
     const before = counts(f.sqlite);
-    assert.equal(await acceptParticipantConsent(f.db, pending.token, false, now), null);
-    assert.equal(await acceptParticipantConsent(f.db, "garbage", true, now), null);
-    assert.equal(await acceptParticipantConsent(f.db, "b".repeat(64), true, now), null);
-    assert.equal(await acceptParticipantConsent(f.db, pending.token, true, now + 600_000), null);
+    assert.equal(await acceptParticipantConsent(f.db, pending.token, false, "v1", now), null);
+    assert.equal(await acceptParticipantConsent(f.db, "garbage", true, "v1", now), null);
+    assert.equal(await acceptParticipantConsent(f.db, "b".repeat(64), true, "v1", now), null);
+    assert.equal(await acceptParticipantConsent(f.db, pending.token, true, "v1", now + 600_000), null);
     assert.deepEqual(counts(f.sqlite), before);
     f.sqlite.prepare("INSERT INTO participant_terms VALUES (?,?)").run("v2", "Published terms two");
     f.sqlite.prepare("UPDATE participant_terms_current SET version=? WHERE id=1").run("v2");
-    assert.equal(await acceptParticipantConsent(f.db, pending.token, true, now + 1), null);
+    assert.equal(await acceptParticipantConsent(f.db, pending.token, true, "v1", now + 1), null);
     assert.deepEqual(counts(f.sqlite), before);
     assert.equal(f.sqlite.prepare("SELECT claim FROM participant_pending_identities").get().claim, null);
   } finally { f.close(); }
@@ -133,14 +133,14 @@ test("acceptance is atomic, only one of two connections can claim, replay has no
     publish(f.sqlite);
     const pending = await createPendingParticipant(f.db, google, now);
     const [a, b] = await Promise.all([
-      acceptParticipantConsent(f.db, pending.token, true, now + 1),
-      acceptParticipantConsent(makeDatabase(second), pending.token, true, now + 1),
+      acceptParticipantConsent(f.db, pending.token, true, "v1", now + 1),
+      acceptParticipantConsent(makeDatabase(second), pending.token, true, "v1", now + 1),
     ]);
     const tokens = [a, b].filter(Boolean);
     assert.equal(tokens.length, 1);
     assert.equal((await getParticipantSession(f.db, cookieHeader(tokens[0]), now + 2)).participantId.length > 0, true);
     assert.deepEqual(counts(f.sqlite), { participants: 1, participant_consents: 1, participant_consent_state: 1, participant_sessions: 1, participant_pending_identities: 0 });
-    assert.equal(await acceptParticipantConsent(f.db, pending.token, true, now + 2), null);
+    assert.equal(await acceptParticipantConsent(f.db, pending.token, true, "v1", now + 2), null);
     assert.equal(f.sqlite.prepare("SELECT version FROM participant_consents").get().version, "v1");
   } finally { second.close(); f.close(); }
 });
@@ -152,11 +152,11 @@ test("SQL failure and ignored session write rollback all writes and release clai
     const pending = await createPendingParticipant(f.db, google, now);
     const before = counts(f.sqlite);
     f.sqlite.exec("CREATE TRIGGER fail_participant_session BEFORE INSERT ON participant_sessions BEGIN SELECT RAISE(IGNORE); END");
-    await assert.rejects(acceptParticipantConsent(f.db, pending.token, true, now + 1));
+    await assert.rejects(acceptParticipantConsent(f.db, pending.token, true, "v1", now + 1));
     assert.deepEqual(counts(f.sqlite), before);
     assert.equal(f.sqlite.prepare("SELECT claim FROM participant_pending_identities").get().claim, null);
     f.sqlite.exec("DROP TRIGGER fail_participant_session");
-    assert.ok(await acceptParticipantConsent(f.db, pending.token, true, now + 2));
+    assert.ok(await acceptParticipantConsent(f.db, pending.token, true, "v1", now + 2));
   } finally { f.close(); }
 });
 
@@ -165,12 +165,12 @@ test("revoke invalidates sessions and pending while retaining participant and co
   try {
     publish(f.sqlite);
     const pending = await createPendingParticipant(f.db, google, now);
-    const session = await acceptParticipantConsent(f.db, pending.token, true, now + 1);
+    const session = await acceptParticipantConsent(f.db, pending.token, true, "v1", now + 1);
     const participantId = (await getParticipantSession(f.db, cookieHeader(session), now + 2)).participantId;
     const extra = await createParticipantSession(f.db, participantId, now + 2);
     await createPendingParticipant(f.db, google, now + 2);
     const epoch = f.sqlite.prepare("SELECT epoch FROM participant_consent_state").get().epoch;
-    assert.equal(await revokeParticipantConsent(f.db, participantId), true);
+    assert.equal(await revokeParticipantConsent(f.db, cookieHeader(session), now + 3), true);
     assert.equal(await getParticipantSession(f.db, cookieHeader(session), now + 3), null);
     assert.equal(await getParticipantSession(f.db, cookieHeader(extra), now + 3), null);
     await assert.rejects(createParticipantSession(f.db, participantId, now + 3), { message: "PARTICIPANT_SESSION_CREATE_FAILED" });
@@ -186,11 +186,11 @@ test("fresh verified consent on an existing identity advances epoch and invalida
   try {
     publish(f.sqlite);
     const first = await createPendingParticipant(f.db, google, now);
-    const oldSession = await acceptParticipantConsent(f.db, first.token, true, now + 1);
+    const oldSession = await acceptParticipantConsent(f.db, first.token, true, "v1", now + 1);
     const existingId = (await getParticipantSession(f.db, cookieHeader(oldSession), now + 2)).participantId;
     const previousEpoch = f.sqlite.prepare("SELECT epoch FROM participant_consent_state").get().epoch;
     const second = await createPendingParticipant(f.db, { ...google, name: "Updated" }, now + 2);
-    const newSession = await acceptParticipantConsent(f.db, second.token, true, now + 3);
+    const newSession = await acceptParticipantConsent(f.db, second.token, true, "v1", now + 3);
     assert.equal(await getParticipantSession(f.db, cookieHeader(oldSession), now + 4), null);
     assert.equal((await getParticipantSession(f.db, cookieHeader(newSession), now + 4)).participantId, existingId);
     assert.equal(f.sqlite.prepare("SELECT epoch FROM participant_consent_state").get().epoch, previousEpoch + 1);

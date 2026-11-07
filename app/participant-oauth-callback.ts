@@ -2,7 +2,7 @@
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
 import { consumeParticipantOauth, clearParticipantOauthBindingCookie } from "./participant-oauth.ts";
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
-import { getPublishedParticipantTerms, createPendingParticipant } from "./participant-consent.ts";
+import { getPublishedParticipantTerms, createPendingParticipant, participantPendingCookie } from "./participant-consent.ts";
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
 import { verifyGoogleIdToken } from "./google-oidc.ts";
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
@@ -25,7 +25,6 @@ type CallbackServices = {
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const MAX_TOKEN_BODY_BYTES = 65_536;
 const MAX_ID_TOKEN_LENGTH = 16_384;
-const PENDING_COOKIE = "__Host-puzzle-participant-pending";
 const HEADERS = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" };
 
 function failure(status: number): Response {
@@ -159,7 +158,7 @@ export async function participantOauthCallback(
       return failure(503);
     }
     const headers = new Headers({ ...HEADERS, Location: "/participant/consent" });
-    headers.append("Set-Cookie", `${PENDING_COOKIE}=${pending.token}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax`);
+    headers.append("Set-Cookie", participantPendingCookie(pending.token));
     headers.append("Set-Cookie", clearParticipantOauthBindingCookie());
     return new Response(null, { status: 303, headers });
   } catch {

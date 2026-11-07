@@ -27,7 +27,7 @@ async function signedToken(nonce, claimOverrides = {}, headerOverrides = {}) {
 function fixture(published = true) {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
-  for (const migration of readdirSync("drizzle").filter((name) => /^000[0-9].*[.]sql$/.test(name)).sort()) {
+  for (const migration of readdirSync("drizzle").filter((name) => /^00(?:0[0-9]|10).*[.]sql$/.test(name)).sort()) {
     sqlite.exec(readFileSync("drizzle/" + migration, "utf8"));
   }
   if (published) {

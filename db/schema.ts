@@ -168,3 +168,12 @@ export const registrationIdentities = sqliteTable("registration_identities", {
   uniqueIndex("registration_identities_form_member_unique").on(table.formId, table.memberId).where(sql`${table.memberId} IS NOT NULL AND ${table.status} = 'active'`),
   uniqueIndex("registration_identities_form_participant_unique").on(table.formId, table.participantId).where(sql`${table.participantId} IS NOT NULL AND ${table.status} = 'active'`),
 ]);
+
+export const registrationQrTokens = sqliteTable("registration_qr_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  submissionId: text("submission_id").notNull().references(() => registrationSubmissions.id),
+  issuedAt: integer("issued_at").notNull(),
+  revokedAt: integer("revoked_at"),
+}, (table) => [
+  index("registration_qr_tokens_submission_idx").on(table.submissionId),
+]);

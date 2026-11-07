@@ -78,6 +78,13 @@
       "when": 1794056000000,
       "tag": "0010_participant_consent_revoke",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794075707056,
+      "tag": "0011_registration_qr_tokens",
+      "breakpoints": true
     }
   ]
 }

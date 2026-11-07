@@ -92,6 +92,17 @@ export const participantSessions = sqliteTable("participant_sessions", {
   index("participant_sessions_participant_idx").on(table.participantId),
 ]);
 
+export const participantOauthTransactions = sqliteTable("participant_oauth_transactions", {
+  stateHash: text("state_hash").primaryKey(),
+  bindingHash: text("binding_hash").notNull(),
+  nonce: text("nonce").notNull(),
+  codeVerifier: text("code_verifier").notNull(),
+  returnPath: text("return_path").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  index("participant_oauth_transactions_expiry_idx").on(table.expiresAt),
+]);
+
 export const participantConsents = sqliteTable("participant_consents", {
   id: text("id").primaryKey(),
   participantId: text("participant_id").notNull().references(() => participants.id),

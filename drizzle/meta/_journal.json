@@ -57,6 +57,13 @@
       "when": 1794042189063,
       "tag": "0007_participant_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794053828542,
+      "tag": "0008_participant_oauth",
+      "breakpoints": true
     }
   ]
 }

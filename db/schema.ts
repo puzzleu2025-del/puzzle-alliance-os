@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, foreignKey, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const members = sqliteTable("members", {
   userId: text("user_id").primaryKey(), username: text("username").notNull().default(""), email: text("email").notNull(), displayName: text("display_name").notNull(),
@@ -71,4 +71,50 @@ export const registrationSubmissions = sqliteTable("registration_submissions", {
 }, (table) => [
   index("registration_submissions_form_idx").on(table.formId),
   uniqueIndex("registration_submissions_idempotency_unique").on(table.formId, table.idempotencyHash),
+  uniqueIndex("registration_submissions_id_form_unique").on(table.id, table.formId),
+]);
+
+export const participants = sqliteTable("participants", {
+  id: text("id").primaryKey(),
+  googleSub: text("google_sub").notNull(),
+  email: text("email").notNull(),
+  displayName: text("display_name").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("participants_google_sub_unique").on(table.googleSub),
+]);
+
+export const participantSessions = sqliteTable("participant_sessions", {
+  tokenHash: text("token_hash").primaryKey(),
+  participantId: text("participant_id").notNull().references(() => participants.id),
+  expiresAt: integer("expires_at").notNull(),
+}, (table) => [
+  index("participant_sessions_participant_idx").on(table.participantId),
+]);
+
+export const participantConsents = sqliteTable("participant_consents", {
+  id: text("id").primaryKey(),
+  participantId: text("participant_id").notNull().references(() => participants.id),
+  version: text("version").notNull(),
+  acceptedAt: text("accepted_at").notNull(),
+}, (table) => [
+  index("participant_consents_participant_idx").on(table.participantId),
+]);
+
+export const registrationIdentities = sqliteTable("registration_identities", {
+  submissionId: text("submission_id").primaryKey(),
+  formId: text("form_id").notNull(),
+  memberId: text("member_id").references(() => members.userId),
+  participantId: text("participant_id").references(() => participants.id),
+  status: text("status").notNull().default("active"),
+}, (table) => [
+  foreignKey({
+    columns: [table.submissionId, table.formId],
+    foreignColumns: [registrationSubmissions.id, registrationSubmissions.formId],
+    name: "registration_identities_submission_form_fk",
+  }),
+  check("registration_identities_one_identity", sql`(${table.memberId} IS NOT NULL) <> (${table.participantId} IS NOT NULL)`),
+  check("registration_identities_valid_status", sql`${table.status} IN ('active', 'cancelled')`),
+  uniqueIndex("registration_identities_form_member_unique").on(table.formId, table.memberId).where(sql`${table.memberId} IS NOT NULL AND ${table.status} = 'active'`),
+  uniqueIndex("registration_identities_form_participant_unique").on(table.formId, table.participantId).where(sql`${table.participantId} IS NOT NULL AND ${table.status} = 'active'`),
 ]);

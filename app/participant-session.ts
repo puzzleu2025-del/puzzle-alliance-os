@@ -38,15 +38,15 @@ function validTime(nowMs: number): boolean {
 }
 
 /**
- * The caller must establish the participant's authorization and current consent
- * before invoking this function. A previous consent row alone is not proof.
+ * The caller must authenticate and authorize the participant. This function
+ * independently requires an active consent state for currently published terms.
  */
 export async function createParticipantSession(db: D1Database, participantId: string, nowMs = Date.now()): Promise<string> {
-  if (!participantId || participantId.length > 255 || !validTime(nowMs)) throw new Error("INVALID_PARTICIPANT_SESSION");
+  if (typeof participantId !== "string" || !participantId || participantId.length > 255 || !validTime(nowMs)) throw new Error("INVALID_PARTICIPANT_SESSION");
   const token = randomSecret();
   const row = await db.prepare(
-    "INSERT INTO participant_sessions (token_hash,participant_id,expires_at) VALUES (?,?,?) RETURNING participant_id",
-  ).bind(await secretHash(token), participantId, nowMs + PARTICIPANT_SESSION_SECONDS * 1_000).first();
+    "INSERT INTO participant_sessions (token_hash,participant_id,expires_at,consent_epoch) SELECT ?,s.participant_id,?,s.epoch FROM participant_consent_state s JOIN participant_terms_current t ON t.id=1 AND t.version=s.terms_version WHERE s.participant_id=? AND s.status='active' RETURNING participant_id",
+  ).bind(await secretHash(token), nowMs + PARTICIPANT_SESSION_SECONDS * 1_000, participantId).first();
   if (!row) throw new Error("PARTICIPANT_SESSION_CREATE_FAILED");
   return token;
 }
@@ -55,7 +55,7 @@ export async function getParticipantSession(db: D1Database, cookieHeader: string
   const token = readCookie(cookieHeader, PARTICIPANT_SESSION_COOKIE);
   if (!token || !validTime(nowMs)) return null;
   return await db.prepare(
-    "SELECT participant_id AS participantId FROM participant_sessions WHERE token_hash=? AND expires_at>?",
+    "SELECT ps.participant_id AS participantId FROM participant_sessions ps JOIN participant_consent_state s ON s.participant_id=ps.participant_id AND s.status='active' AND s.epoch=ps.consent_epoch JOIN participant_terms_current t ON t.id=1 AND t.version=s.terms_version WHERE ps.token_hash=? AND ps.expires_at>?",
   ).bind(await secretHash(token), nowMs).first<{ participantId: string }>();
 }
 

@@ -64,6 +64,13 @@
       "when": 1794053828542,
       "tag": "0008_participant_oauth",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794054971362,
+      "tag": "0009_participant_consent",
+      "breakpoints": true
     }
   ]
 }

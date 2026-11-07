@@ -88,6 +88,7 @@ export const participantSessions = sqliteTable("participant_sessions", {
   tokenHash: text("token_hash").primaryKey(),
   participantId: text("participant_id").notNull().references(() => participants.id),
   expiresAt: integer("expires_at").notNull(),
+  consentEpoch: integer("consent_epoch"),
 }, (table) => [
   index("participant_sessions_participant_idx").on(table.participantId),
 ]);
@@ -110,6 +111,44 @@ export const participantConsents = sqliteTable("participant_consents", {
   acceptedAt: text("accepted_at").notNull(),
 }, (table) => [
   index("participant_consents_participant_idx").on(table.participantId),
+]);
+
+export const participantTerms = sqliteTable("participant_terms", {
+  version: text("version").primaryKey(),
+  content: text("content").notNull(),
+}, (table) => [
+  check("participant_terms_version_nonempty", sql`length(trim(${table.version})) > 0`),
+  check("participant_terms_content_nonempty", sql`length(trim(${table.content})) > 0`),
+]);
+
+export const participantTermsCurrent = sqliteTable("participant_terms_current", {
+  id: integer("id").primaryKey(),
+  version: text("version").notNull().references(() => participantTerms.version),
+}, (table) => [
+  check("participant_terms_current_singleton", sql`${table.id} = 1`),
+]);
+
+export const participantConsentState = sqliteTable("participant_consent_state", {
+  participantId: text("participant_id").primaryKey().references(() => participants.id),
+  status: text("status").notNull(),
+  epoch: integer("epoch").notNull(),
+  termsVersion: text("terms_version").notNull().references(() => participantTerms.version),
+}, (table) => [
+  check("participant_consent_state_status", sql`${table.status} IN ('active', 'revoked')`),
+  check("participant_consent_state_epoch", sql`${table.epoch} >= 1`),
+]);
+
+export const participantPendingIdentities = sqliteTable("participant_pending_identities", {
+  tokenHash: text("token_hash").primaryKey(),
+  googleSub: text("google_sub").notNull(),
+  email: text("email").notNull(),
+  displayName: text("display_name").notNull(),
+  termsVersion: text("terms_version").notNull().references(() => participantTerms.version),
+  expiresAt: integer("expires_at").notNull(),
+  claim: text("claim"),
+}, (table) => [
+  index("participant_pending_identities_expiry_idx").on(table.expiresAt),
+  uniqueIndex("participant_pending_identities_claim_unique").on(table.claim).where(sql`${table.claim} IS NOT NULL`),
 ]);
 
 export const registrationIdentities = sqliteTable("registration_identities", {

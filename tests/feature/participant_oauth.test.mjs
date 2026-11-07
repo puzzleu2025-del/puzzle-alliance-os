@@ -15,11 +15,14 @@ import {
 function fixture() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
-  for (const migration of readdirSync("drizzle").filter((name) => /^000[0-8].*[.]sql$/.test(name)).sort()) {
+  for (const migration of readdirSync("drizzle").filter((name) => /^000[0-9].*[.]sql$/.test(name)).sort()) {
     sqlite.exec(readFileSync("drizzle/" + migration, "utf8"));
   }
   sqlite.prepare("INSERT INTO participants VALUES (?,?,?,?,?)")
     .run("p1", "google-id", "user@example.com", "User", "2026-11-07");
+  sqlite.prepare("INSERT INTO participant_terms VALUES (?,?)").run("v1", "Example terms");
+  sqlite.prepare("INSERT INTO participant_terms_current VALUES (1,?)").run("v1");
+  sqlite.prepare("INSERT INTO participant_consent_state VALUES (?, ?, ?, ?)").run("p1", "active", 1, "v1");
   const db = {
     prepare(sql) {
       return {

@@ -21,6 +21,8 @@ export type RegistrationFormStatus = "draft" | "open" | "closed";
 export type RegistrationSubmissionStatus = "submitted" | "confirmed" | "cancelled";
 export type RegistrationPaymentStatus = "unpaid" | "checking" | "paid" | "refunded" | "not_required";
 export type RegistrationAnswer = string | string[] | number | boolean | null;
+export const registrationProfileKeys = ["displayName", "email", "phone", "organization", "position"] as const;
+export type RegistrationProfileKey = (typeof registrationProfileKeys)[number];
 
 export type RegistrationField = {
   id: string;
@@ -35,6 +37,7 @@ export type RegistrationField = {
   max?: number;
   maxLength?: number;
   sensitive?: boolean;
+  profileKey?: RegistrationProfileKey;
 };
 
 export type RegistrationForm = {
@@ -122,6 +125,27 @@ export function registrationPresentationError(value: unknown): string | null {
     if (value[key] !== undefined && (typeof value[key] !== "string" || value[key].length > REGISTRATION_ARTICLE_LIMIT)) return "表單說明與個資告知各不得超過 20,000 字";
   }
   if (fields.some((field) => isRecord(field) && field.helpText !== undefined && (typeof field.helpText !== "string" || field.helpText.length > MAX_TEXT))) return "問題詳細說明不得超過 10,000 字";
+  const profileError = registrationProfileMappingError(fields);
+  if (profileError) return profileError;
+  return null;
+}
+
+export function isRegistrationProfileMappingCompatible(type: unknown, profileKey: unknown): profileKey is RegistrationProfileKey {
+  if (typeof profileKey !== "string" || !registrationProfileKeys.includes(profileKey as RegistrationProfileKey)) return false;
+  if (type === "short_text" || type === "text") return true;
+  return (profileKey === "email" && type === "email") || (profileKey === "phone" && (type === "phone" || type === "tel"));
+}
+
+export function registrationProfileMappingError(fields: unknown): string | null {
+  if (!Array.isArray(fields)) return null;
+  const used = new Set<RegistrationProfileKey>();
+  for (const field of fields) {
+    if (!isRecord(field) || field.profileKey === undefined) continue;
+    if (!isRegistrationProfileMappingCompatible(field.type, field.profileKey)) return "個人資料對應與回答方式不相容";
+    if (field.sensitive !== true) return "對應個人資料的問題必須標記為個資";
+    if (used.has(field.profileKey)) return "同一項個人資料只能對應一個問題";
+    used.add(field.profileKey);
+  }
   return null;
 }
 
@@ -173,6 +197,7 @@ function normalizeOptions(value: unknown) {
 
 export function normalizeRegistrationField(value: unknown, index = 0): RegistrationField | null {
   if (!isRecord(value)) return null;
+  if (registrationProfileMappingError([value])) return null;
   const type = registrationFieldTypes.includes(value.type as RegistrationFieldType)
     ? (value.type as RegistrationFieldType)
     : "short_text";
@@ -196,11 +221,13 @@ export function normalizeRegistrationField(value: unknown, index = 0): Registrat
     max: finiteNumber(value.max),
     maxLength: maxLength === undefined ? undefined : Math.max(1, Math.min(MAX_TEXT, Math.floor(maxLength))),
     sensitive: value.sensitive === true,
+    ...(value.profileKey === undefined ? {} : { profileKey: value.profileKey as RegistrationProfileKey }),
   };
 }
 
 export function normalizeRegistrationForm(value: unknown): RegistrationForm | null {
   if (!isRecord(value)) return null;
+  if (registrationProfileMappingError(value.fields)) return null;
   const id = normalizeRegistrationId(value.id);
   const activityId = normalizeRegistrationId(value.activityId);
   const title = normalizeRegistrationText(value.title, 200);

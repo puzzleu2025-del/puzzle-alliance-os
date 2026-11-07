@@ -1,7 +1,7 @@
 "use client";
 
 import { Dispatch, DragEvent, SetStateAction, useState } from "react";
-import type { RegistrationField, RegistrationFieldType } from "./registration-types";
+import { isRegistrationProfileMappingCompatible, registrationProfileKeys, type RegistrationField, type RegistrationFieldType, type RegistrationProfileKey } from "./registration-types";
 import "./registration-builder.css";
 import RegistrationImageUpload from "./registration-image";
 
@@ -34,6 +34,13 @@ const optionTypes = new Set<RegistrationFieldType>([
 
 const uid = () => crypto.randomUUID();
 const newOption = (index: number) => `選項 ${index + 1}`;
+const profileLabels: Record<RegistrationProfileKey, string> = {
+  displayName: "姓名",
+  email: "電子郵件",
+  phone: "聯絡電話",
+  organization: "所屬單位",
+  position: "職務／身分",
+};
 
 function canonicalType(field: RegistrationField): RegistrationFieldType {
   if (field.type === "text") return "short_text";
@@ -108,8 +115,9 @@ export default function RegistrationBuilder({ fields, setFields, locked, busy, o
 
   const duplicate = (field: RegistrationField, index: number) => {
     if (disabled) return;
+    const { profileKey: _profileKey, ...original } = field;
     const copy: RegistrationField = {
-      ...field,
+      ...original,
       id: uid(),
       label: `${field.label || "未命名問題"}（副本）`,
       options: field.options ? [...field.options] : undefined,
@@ -123,7 +131,26 @@ export default function RegistrationBuilder({ fields, setFields, locked, busy, o
   };
 
   const changeType = (field: RegistrationField, type: RegistrationFieldType) => {
-    update(field.id, { type, options: defaultOptions(type, field.options) });
+    update(field.id, {
+      type,
+      options: defaultOptions(type, field.options),
+      ...(field.profileKey && !isRegistrationProfileMappingCompatible(type, field.profileKey) ? { profileKey: undefined } : {}),
+    });
+  };
+
+  const changeProfileKey = (id: string, key: RegistrationProfileKey | "") => {
+    if (disabled) return;
+    setFields((rows) => {
+      const target = rows.find((row) => row.id === id);
+      if (!target || (key && (!isRegistrationProfileMappingCompatible(target.type, key) ||
+          rows.some((row) => row.id !== id && row.profileKey === key)))) return rows;
+      return rows.map((row) => {
+        if (row.id !== id) return row;
+        if (key) return { ...row, profileKey: key, sensitive: true };
+        const { profileKey: _profileKey, ...remaining } = row;
+        return remaining;
+      });
+    });
   };
 
   const updateOption = (field: RegistrationField, optionIndex: number, value: string) => {
@@ -180,6 +207,17 @@ export default function RegistrationBuilder({ fields, setFields, locked, busy, o
           </label>
         </div>
 
+        <label className="registration-builder-help">
+          <span>對應個人資料</span>
+          <select value={field.profileKey ?? ""} disabled={disabled} onChange={(event) => changeProfileKey(field.id, event.target.value as RegistrationProfileKey | "")}>
+            <option value="">不自動帶入</option>
+            {registrationProfileKeys.filter((key) => isRegistrationProfileMappingCompatible(field.type, key)).map((key) =>
+              <option key={key} value={key} disabled={fields.some((row) => row.id !== field.id && row.profileKey === key)}>
+                {profileLabels[key]}
+              </option>)}
+          </select>
+        </label>
+
         <label className="registration-builder-help"><span>詳細說明</span><textarea rows={4} maxLength={10000} value={field.helpText ?? ""} disabled={busy} placeholder="補充文章、填答說明或個資使用說明" onChange={(event) => updatePresentation(field.id, { helpText: event.target.value })} /></label>
         <RegistrationImageUpload label="問題圖片" value={field.image} disabled={busy} onProcessing={onImageProcessing} onChange={(image) => updatePresentation(field.id, { image })} />
 
@@ -205,7 +243,7 @@ export default function RegistrationBuilder({ fields, setFields, locked, busy, o
           </div>
           <div className="registration-builder-switches">
             <label><span>必填</span><input type="checkbox" role="switch" disabled={disabled} checked={field.required} onChange={(event) => update(field.id, { required: event.target.checked })} /></label>
-            <label><span>個資</span><input type="checkbox" role="switch" disabled={disabled} checked={Boolean(field.sensitive)} onChange={(event) => update(field.id, { sensitive: event.target.checked })} /></label>
+            <label><span>個資</span><input type="checkbox" role="switch" disabled={disabled || Boolean(field.profileKey)} checked={Boolean(field.sensitive)} onChange={(event) => update(field.id, { sensitive: event.target.checked })} /></label>
           </div>
         </footer>
       </li>)}

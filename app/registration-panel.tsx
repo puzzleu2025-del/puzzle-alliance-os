@@ -13,9 +13,9 @@ import "./registration-panel.css";
 
 const uid = () => crypto.randomUUID();
 const initialFields = (): RegistrationField[] => [
-  { id: uid(), label: "姓名", type: "short_text", required: true, sensitive: true },
-  { id: uid(), label: "電子郵件", type: "email", required: true, sensitive: true, options: [] },
-  { id: uid(), label: "聯絡電話", type: "phone", required: false, sensitive: true },
+  { id: uid(), label: "姓名", type: "short_text", required: true, sensitive: true, profileKey: "displayName" },
+  { id: uid(), label: "電子郵件", type: "email", required: true, sensitive: true, options: [], profileKey: "email" },
+  { id: uid(), label: "聯絡電話", type: "phone", required: false, sensitive: true, profileKey: "phone" },
 ];
 const optionType = (type: RegistrationFieldType) => ["single_choice", "multiple_choice", "select", "radio"].includes(type);
 const mask = (value: string) => value ? `${value.slice(0, 1)}${"•".repeat(Math.min(8, Math.max(3, value.length - 1)))}` : "—";

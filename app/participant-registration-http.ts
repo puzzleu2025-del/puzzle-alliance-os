@@ -5,13 +5,15 @@ import { submitParticipantRegistration } from "./participant-registration.ts";
 import { issueParticipantQr, revokeParticipantQr } from "./participant-qr.ts";
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
 import { secretHash } from "./participant-session.ts";
+// @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
+import { getParticipantProfilePrefill } from "./participant-profile-prefill.ts";
 
 type ServerConfig = {
   origin: string;
   /** Set only when the deployment guarantees Cloudflare overwrites this header. */
   trustedCloudflareEdge?: boolean;
 };
-type Operation = "registration" | "qr-issue" | "qr-revoke";
+type Operation = "registration" | "qr-issue" | "qr-revoke" | "prefill";
 
 const HEADERS = {
   "Cache-Control": "no-store",
@@ -105,6 +107,7 @@ export async function participantRegistrationHttp(
     registration: "/api/participant/registrations",
     "qr-issue": "/api/participant/qr",
     "qr-revoke": "/api/participant/qr/revoke",
+    prefill: "/api/participant/prefill",
   };
   if (!Object.hasOwn(paths, operation)) return failure(503);
   if (request.method !== "POST") return failure(405);
@@ -120,6 +123,9 @@ export async function participantRegistrationHttp(
     if (operation === "registration") {
       if (!exactObject(body, ["slug", "answers", "consent", "idempotencyKey", "formVersion"]) ||
           typeof body.slug !== "string" || body.slug.length !== 32 || !/^[a-f0-9]{32}$/.test(body.slug)) return failure(400);
+    } else if (operation === "prefill") {
+      if (!exactObject(body, ["slug"]) || typeof body.slug !== "string" ||
+          body.slug.length !== 32 || !/^[a-f0-9]{32}$/.test(body.slug)) return failure(400);
     } else if (operation === "qr-issue") {
       if (!exactObject(body, ["submissionId"]) || typeof body.submissionId !== "string" ||
           body.submissionId.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(body.submissionId) ||
@@ -130,6 +136,10 @@ export async function participantRegistrationHttp(
     }
     if (!await rateAllowed(db, request, config, operation)) return failure(429);
     const cookie = request.headers.get("Cookie");
+    if (operation === "prefill") {
+      const result = await getParticipantProfilePrefill(db, kind, cookie, (body as Record<string, unknown>).slug);
+      return result ? Response.json(result, { headers: HEADERS }) : failure(404);
+    }
     if (operation === "registration") {
       const data = body as Record<string, unknown>;
       const outcome = await submitParticipantRegistration(db, kind, cookie, data.slug, {

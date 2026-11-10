@@ -9,6 +9,7 @@ import { participantRegistrationHttp } from "../../app/participant-registration-
 import { POST as disabledRegistration } from "../../app/api/participant/registrations/route.ts";
 import { POST as disabledQr } from "../../app/api/participant/qr/route.ts";
 import { POST as disabledRevoke } from "../../app/api/participant/qr/revoke/route.ts";
+import { POST as disabledPrefill } from "../../app/api/participant/prefill/route.ts";
 
 const origin = "https://puzzle.example";
 const config = { origin };
@@ -19,7 +20,7 @@ const memberCookie = "puzzle_admin_session=" + memberToken;
 const participantCookie = "__Host-puzzle-participant=" + participantToken;
 const bothCookies = memberCookie + "; " + participantCookie;
 const hash = (value) => createHash("sha256").update(value).digest("hex");
-const paths = { registration: "/api/participant/registrations", "qr-issue": "/api/participant/qr", "qr-revoke": "/api/participant/qr/revoke" };
+const paths = { registration: "/api/participant/registrations", "qr-issue": "/api/participant/qr", "qr-revoke": "/api/participant/qr/revoke", prefill: "/api/participant/prefill" };
 const formBody = (key = "same-key", value = "John") => ({ slug, answers: { name: value }, consent: true, idempotencyKey: key, formVersion: 1 });
 
 function database(sqlite) {
@@ -65,7 +66,7 @@ function fixture() {
   const expires = Date.now() + 3_600_000;
   sqlite.prepare("INSERT INTO admin_sessions VALUES (?,?,?)").run(hash(memberToken), "m1", expires);
   sqlite.prepare("INSERT INTO participant_sessions (token_hash,participant_id,expires_at,consent_epoch) VALUES (?,?,?,1)").run(hash(participantToken), "p1", expires);
-  const schema = { id: "form1", activityId: "activity1", title: "Activity", description: "", status: "open", fields: [{ id: "name", label: "Name", type: "short_text", required: true }], privacyNotice: "Notice" };
+  const schema = { id: "form1", activityId: "activity1", title: "Activity", description: "", status: "open", fields: [{ id: "name", label: "Name", type: "short_text", required: true, profileKey: "displayName", sensitive: true }], privacyNotice: "Notice" };
   sqlite.prepare("INSERT INTO registration_forms VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").run("form1", "activity1", slug, "Activity", "", "open", JSON.stringify(schema), "Notice", 1, "admin-kao19950411", "2026", "2026");
   sqlite.prepare("INSERT INTO registration_submissions (id,form_id,form_version,schema_json,answers_json,consent,idempotency_hash,source_hash,submitted_at) VALUES ('legacy','form1',1,'[]','{}',1,'legacy-key','legacy','2026')").run();
   return { sqlite, db: database(sqlite), close() { sqlite.close(); rmSync(dir, { recursive: true, force: true }); } };
@@ -91,13 +92,86 @@ function secureHeaders(response) {
 }
 
 test("all external POST routes remain hard disabled", async () => {
-  for (const handler of [disabledRegistration, disabledQr, disabledRevoke]) {
+  for (const handler of [disabledRegistration, disabledQr, disabledRevoke, disabledPrefill]) {
     const response = await handler();
     assert.equal(response.status, 503);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("set-cookie"), null);
     assert.equal(response.headers.get("location"), null);
   }
+});
+
+test("prefill returns only the explicitly selected account's mapped fields", async () => {
+  const f = fixture();
+  try {
+    for (const [identity, expected] of [["member", "Member"], ["participant", "Participant"]]) {
+      const response = await call(f, "prefill", { slug }, { identity });
+      assert.equal(response.status, 200);
+      secureHeaders(response);
+      assert.equal(response.headers.get("set-cookie"), null);
+      assert.deepEqual(await response.json(), { formVersion: 1, values: { name: expected } });
+    }
+    for (const options of [{ cookie: null }, { identity: "participant", cookie: memberCookie }, { identity: "member", cookie: participantCookie }]) {
+      const response = await call(f, "prefill", { slug }, options);
+      assert.equal(response.status, 404);
+      secureHeaders(response);
+      assert.deepEqual(await response.json(), { error: "目前無法完成操作" });
+    }
+    f.sqlite.prepare("UPDATE participant_consent_state SET status='revoked',epoch=epoch+1 WHERE participant_id='p1'").run();
+    assert.equal((await call(f, "prefill", { slug }, { identity: "participant" })).status, 404);
+    f.sqlite.prepare("UPDATE registration_forms SET status='closed' WHERE id='form1'").run();
+    assert.equal((await call(f, "prefill", { slug })).status, 404);
+  } finally { f.close(); }
+});
+
+test("prefill rejects forged identity, malformed requests and untrusted origins before rate or data writes", async () => {
+  const f = fixture();
+  try {
+    const cases = [
+      [{ slug, memberId: "m1" }, {}, 400],
+      [{ slug, participantId: "p1" }, {}, 400],
+      [{ slug, email: "same@example.com" }, {}, 400],
+      [{ slug: "not-a-slug" }, {}, 400],
+      [{ slug }, { identity: null }, 400],
+      [{ slug }, { identity: "member, participant" }, 400],
+      [{ slug }, { csrf: null }, 403],
+      [{ slug }, { csrf: "https://evil.example" }, 403],
+      [{ slug }, { requestOrigin: "https://evil.example" }, 403],
+      [{ slug }, { path: paths.prefill + "?id=m1" }, 403],
+      [{ slug }, { headers: { "Content-Type": "text/plain" } }, 400],
+      ["{", {}, 400],
+      ["x".repeat(4097), { headers: { "Content-Length": "1" } }, 400],
+    ];
+    for (const [body, options, status] of cases) {
+      const response = await call(f, "prefill", body, options);
+      assert.equal(response.status, status);
+      secureHeaders(response);
+      assert.equal(response.headers.get("set-cookie"), null);
+    }
+    const request = new Request(origin + paths.prefill, { method: "GET", headers: { Origin: origin } });
+    assert.equal((await participantRegistrationHttp(request, f.db, config, "prefill")).status, 405);
+    assert.equal((await participantRegistrationHttp(req("prefill", { slug }), null, config, "prefill")).status, 503);
+    assert.equal((await call(f, "prefill", { slug }, {}, { origin: "http://puzzle.example" })).status, 503);
+    assert.equal(number(f.sqlite, "auth_attempts"), 0);
+    assert.equal(number(f.sqlite, "registration_identities"), 0);
+  } finally { f.close(); }
+});
+
+test("prefill limits streams and uses an independent shared rate bucket", async () => {
+  const f = fixture();
+  try {
+    const stream = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("x".repeat(4097))); controller.close(); } });
+    const request = new Request(origin + paths.prefill, { method: "POST", headers: { Origin: origin, Cookie: bothCookies, "Content-Type": "application/json", "X-Participant-Identity": "member" }, body: stream, duplex: "half" });
+    assert.equal((await participantRegistrationHttp(request, f.db, config, "prefill")).status, 400);
+    for (let i = 0; i < 30; i++) {
+      assert.equal((await call(f, "prefill", { slug }, { headers: { "cf-connecting-ip": `192.0.2.${i}` } })).status, 200);
+    }
+    const limited = await call(f, "prefill", { slug });
+    assert.equal(limited.status, 429);
+    secureHeaders(limited);
+    assert.equal((await call(f, "registration", formBody())).status, 201);
+    assert.equal(number(f.sqlite, "auth_attempts"), 2);
+  } finally { f.close(); }
 });
 
 test("same-origin, server origin, identity selection, body bounds and exact keys fail before writes", async (t) => {

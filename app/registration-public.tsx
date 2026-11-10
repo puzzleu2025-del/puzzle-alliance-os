@@ -14,6 +14,7 @@ export type RegistrationPublicProps = {
   form: RegistrationForm;
   activityName: string;
   onSubmit: (submission: RegistrationSubmission) => Promise<boolean>;
+  initialValues?: Record<string, string>;
 };
 
 const shellStyle = { maxWidth: 720, margin: "0 auto", padding: "24px 16px" } as const;
@@ -76,8 +77,14 @@ function FieldControl({
   return grouped ? <div style={labelStyle}>{content}</div> : <label style={labelStyle} htmlFor={id}>{content}</label>;
 }
 
-export default function RegistrationPublic({ form, activityName, onSubmit }: RegistrationPublicProps) {
-  const [answers, setAnswers] = useState<Record<string, RegistrationAnswer>>(() => initialAnswers(form));
+export default function RegistrationPublic({ form, activityName, onSubmit, initialValues }: RegistrationPublicProps) {
+  const [answers, setAnswers] = useState<Record<string, RegistrationAnswer>>(() => {
+    const defaults = initialAnswers(form);
+    for (const field of form.fields) {
+      if (field.profileKey && typeof initialValues?.[field.id] === "string") defaults[field.id] = initialValues[field.id];
+    }
+    return defaults;
+  });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);

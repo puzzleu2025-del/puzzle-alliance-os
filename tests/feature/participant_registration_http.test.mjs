@@ -10,6 +10,7 @@ import { POST as disabledRegistration } from "../../app/api/participant/registra
 import { POST as disabledQr } from "../../app/api/participant/qr/route.ts";
 import { POST as disabledRevoke } from "../../app/api/participant/qr/revoke/route.ts";
 import { POST as disabledPrefill } from "../../app/api/participant/prefill/route.ts";
+import { POST as disabledMine } from "../../app/api/participant/registrations/mine/route.ts";
 
 const origin = "https://puzzle.example";
 const config = { origin };
@@ -20,7 +21,7 @@ const memberCookie = "puzzle_admin_session=" + memberToken;
 const participantCookie = "__Host-puzzle-participant=" + participantToken;
 const bothCookies = memberCookie + "; " + participantCookie;
 const hash = (value) => createHash("sha256").update(value).digest("hex");
-const paths = { registration: "/api/participant/registrations", "qr-issue": "/api/participant/qr", "qr-revoke": "/api/participant/qr/revoke", prefill: "/api/participant/prefill" };
+const paths = { registration: "/api/participant/registrations", "qr-issue": "/api/participant/qr", "qr-revoke": "/api/participant/qr/revoke", prefill: "/api/participant/prefill", mine: "/api/participant/registrations/mine" };
 const formBody = (key = "same-key", value = "John") => ({ slug, answers: { name: value }, consent: true, idempotencyKey: key, formVersion: 1 });
 
 function database(sqlite) {
@@ -28,6 +29,7 @@ function database(sqlite) {
     return {
       bind(...args) { return statement(sql, args); },
       async first() { const row = sqlite.prepare(sql).get(...values); return row ? { ...row } : null; },
+      async all() { return { success: true, results: sqlite.prepare(sql).all(...values).map(row => ({ ...row })) }; },
       async run() { const result = sqlite.prepare(sql).run(...values); return { success: true, meta: { changes: Number(result.changes) } }; },
       sql, values,
     };
@@ -92,13 +94,49 @@ function secureHeaders(response) {
 }
 
 test("all external POST routes remain hard disabled", async () => {
-  for (const handler of [disabledRegistration, disabledQr, disabledRevoke, disabledPrefill]) {
+  for (const handler of [disabledRegistration, disabledQr, disabledRevoke, disabledPrefill, disabledMine]) {
     const response = await handler();
     assert.equal(response.status, 503);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("set-cookie"), null);
     assert.equal(response.headers.get("location"), null);
   }
+});
+
+test("mine endpoint only returns chosen identity records and rejects forged bodies", async () => {
+  const f = fixture();
+  try {
+    for (const [body, options, status] of [
+      [{ cursor: null, memberId: "m1" }, {}, 400], [{}, {}, 400], [{ cursor: {} }, {}, 400],
+      [{ cursor: null }, { identity: null }, 400], [{ cursor: null }, { csrf: "https://evil.example" }, 403],
+      ["x".repeat(4097), {}, 400],
+    ]) assert.equal((await call(f, "mine", body, options)).status, status);
+    const member = await (await call(f, "registration", formBody("member"))).json();
+    const participant = await (await call(f, "registration", formBody("participant"), { identity: "participant" })).json();
+    for (const [identity, receipt] of [["member", member.receiptId], ["participant", participant.receiptId]]) {
+      const response = await call(f, "mine", { cursor: null }, { identity });
+      assert.equal(response.status, 200); secureHeaders(response);
+      const data = await response.json();
+      assert.deepEqual(data.registrations.map(row => row.submissionId), [receipt]);
+      assert.equal(data.nextCursor, null);
+      assert.ok(!JSON.stringify(data).includes("same@example.com"));
+      assert.ok(!JSON.stringify(data).includes("John"));
+    }
+    assert.equal((await call(f, "mine", { cursor: null }, { cookie: null })).status, 401);
+    f.sqlite.exec("UPDATE participant_consent_state SET status='revoked',epoch=epoch+1 WHERE participant_id='p1'");
+    assert.equal((await call(f, "mine", { cursor: null }, { identity: "participant" })).status, 401);
+    assert.equal(f.sqlite.prepare("SELECT answers_json FROM registration_submissions WHERE id='legacy'").get().answers_json, "{}");
+  } finally { f.close(); }
+});
+
+test("mine uses its own rate limit and never accepts a spoofed source by default", async () => {
+  const f = fixture();
+  try {
+    for (let i = 0; i < 30; i++) assert.equal((await call(f, "mine", { cursor: null }, { headers: { "cf-connecting-ip": `192.0.2.${i}` } })).status, 200);
+    assert.equal((await call(f, "mine", { cursor: null })).status, 429);
+    assert.equal((await call(f, "registration", formBody())).status, 201);
+    assert.equal(number(f.sqlite, "auth_attempts"), 2);
+  } finally { f.close(); }
 });
 
 test("prefill returns only the explicitly selected account's mapped fields", async () => {

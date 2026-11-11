@@ -7,13 +7,15 @@ import { issueParticipantQr, revokeParticipantQr } from "./participant-qr.ts";
 import { secretHash } from "./participant-session.ts";
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
 import { getParticipantProfilePrefill } from "./participant-profile-prefill.ts";
+// @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
+import { listMyRegistrations } from "./participant-my-registrations.ts";
 
 type ServerConfig = {
   origin: string;
   /** Set only when the deployment guarantees Cloudflare overwrites this header. */
   trustedCloudflareEdge?: boolean;
 };
-type Operation = "registration" | "qr-issue" | "qr-revoke" | "prefill";
+type Operation = "registration" | "qr-issue" | "qr-revoke" | "prefill" | "mine";
 
 const HEADERS = {
   "Cache-Control": "no-store",
@@ -108,6 +110,7 @@ export async function participantRegistrationHttp(
     "qr-issue": "/api/participant/qr",
     "qr-revoke": "/api/participant/qr/revoke",
     prefill: "/api/participant/prefill",
+    mine: "/api/participant/registrations/mine",
   };
   if (!Object.hasOwn(paths, operation)) return failure(503);
   if (request.method !== "POST") return failure(405);
@@ -126,6 +129,8 @@ export async function participantRegistrationHttp(
     } else if (operation === "prefill") {
       if (!exactObject(body, ["slug"]) || typeof body.slug !== "string" ||
           body.slug.length !== 32 || !/^[a-f0-9]{32}$/.test(body.slug)) return failure(400);
+    } else if (operation === "mine") {
+      if (!exactObject(body, ["cursor"])) return failure(400);
     } else if (operation === "qr-issue") {
       if (!exactObject(body, ["submissionId"]) || typeof body.submissionId !== "string" ||
           body.submissionId.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(body.submissionId) ||
@@ -136,6 +141,11 @@ export async function participantRegistrationHttp(
     }
     if (!await rateAllowed(db, request, config, operation)) return failure(429);
     const cookie = request.headers.get("Cookie");
+    if (operation === "mine") {
+      const result = await listMyRegistrations(db, kind, cookie, (body as Record<string, unknown>).cursor);
+      if (!result.ok) return failure({ invalid: 400, unauthorized: 401, unavailable: 503 }[result.code]);
+      return Response.json({ registrations: result.registrations, nextCursor: result.nextCursor }, { headers: HEADERS });
+    }
     if (operation === "prefill") {
       const result = await getParticipantProfilePrefill(db, kind, cookie, (body as Record<string, unknown>).slug);
       return result ? Response.json(result, { headers: HEADERS }) : failure(404);

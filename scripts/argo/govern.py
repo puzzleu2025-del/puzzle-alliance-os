@@ -5,6 +5,7 @@ gate, not an OS sandbox and not an authenticated identity service.
 import argparse
 import datetime as dt
 import fnmatch
+import functools
 import hashlib
 import importlib.util
 import json
@@ -13,8 +14,69 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 import ledger
+
+
+_locks_guard = threading.Lock()
+_thread_locks = {}
+_held = threading.local()
+
+
+def governance_locked(func):
+    """Serialize cooperating governance operations per worktree, including nested calls."""
+    @functools.wraps(func)
+    def wrapped(root, *args, **kwargs):
+        root = Path(root).resolve()
+        key = str(root)
+        held = getattr(_held, "roots", set())
+        if key in held:
+            return func(root, *args, **kwargs)
+        with _locks_guard:
+            local_lock = _thread_locks.setdefault(key, threading.Lock())
+        require(local_lock.acquire(blocking=False), "GOVERNANCE_BUSY")
+        file = None
+        locked = False
+        try:
+            lock_path = safe(root, ".argo/runtime/govern.lock")
+            runtime = lock_path.parent
+            runtime.mkdir(parents=True, exist_ok=True)
+            file = open(lock_path, "a+b")
+            file.seek(0)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+            except (OSError, BlockingIOError) as exc:
+                raise ValueError("GOVERNANCE_BUSY") from exc
+            _held.roots = held | {key}
+            return func(root, *args, **kwargs)
+        finally:
+            _held.roots = held
+            if file is not None:
+                if locked:
+                    file.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+                file.close()
+            local_lock.release()
+    return wrapped
+
+
+def require_active(root, ident):
+    active = root / ".argo/runtime/active.json"
+    require(active.exists() and read(active).get("task_id") == ident, "TASK_NOT_ACTIVE")
+    _, task = load_task(root, ident)
+    require(task.get("status") != "ABORTED", "TASK_ABORTED")
 
 
 def now():
@@ -157,13 +219,14 @@ def set_task(p, task):
     save(p / "task.json", task)
 
 
+@governance_locked
 def begin(root, ident, feature):
     p = base(root, ident)
     require(not p.exists(), "TASK_EXISTS")
     active_path = root / ".argo/runtime/active.json"
     if active_path.exists():
         _, old = load_task(root, read(active_path)["task_id"])
-        require(old["status"] == "COMPLETE", "ACTIVE_TASK_EXISTS")
+        require(old["status"] in ("COMPLETE", "ABORTED"), "ACTIVE_TASK_EXISTS")
     packet = retrieval(root, feature)  # Fail before any baseline/plan when vault unavailable.
     baseline = snapshot(root)
     status = git(root, "status", "--porcelain=v1", "-z").decode()
@@ -185,7 +248,28 @@ def begin(root, ident, feature):
     return packet
 
 
+@governance_locked
+def abort(root, ident, actor, reason):
+    require_active(root, ident)
+    require(isinstance(actor, str) and 0 < len(actor.strip()) <= 120 and
+            isinstance(reason, str) and 0 < len(reason.strip()) <= 2000, "ABORT_EVIDENCE_REQUIRED")
+    p, task = load_task(root, ident)
+    require(task["status"] in ("INVESTIGATED", "PLANNED", "EXECUTING", "REJECTED", "REVIEWED"), "TASK_NOT_ABORTABLE")
+    require(sha((p / "baseline.json").read_bytes()) == task["baseline_hash"], "BASELINE_TAMPERED")
+    require(sha((p / "retrieval.json").read_bytes()) == task["retrieval_hash"], "RETRIEVAL_TAMPERED")
+    if task.get("plan_revision"):
+        contract(p, task)
+    prior_hash = sha((p / "task.json").read_bytes())
+    evidence = {"actor": actor.strip(), "reason": reason.strip(), "at": now(),
+                "previous_status": task["status"], "previous_task_hash": prior_hash, "tree": tree(root)}
+    task.update(status="ABORTED", abort=evidence)
+    set_task(p, task)
+    return {"status": "ABORTED", "task_id": ident, "abort": evidence}
+
+
+@governance_locked
 def plan(root, ident, contract_path):
+    require_active(root, ident)
     p, task = load_task(root, ident)
     require(task["status"] in ("INVESTIGATED", "REJECTED", "EXECUTING"), "INVALID_PLAN_STATE")
     c = read(contract_path)
@@ -224,7 +308,9 @@ def contract(p, task):
     return c
 
 
+@governance_locked
 def execute(root, ident):
+    require_active(root, ident)
     p, t = load_task(root, ident)
     require(t["status"] == "PLANNED", "PLAN_REQUIRED")
     c = contract(p, t)
@@ -246,7 +332,9 @@ def execute(root, ident):
     set_task(p, t)
 
 
+@governance_locked
 def diff_gate(root, ident):
+    require_active(root, ident)
     p, t = load_task(root, ident)
     c = contract(p, t)
     require(sha((p / "baseline.json").read_bytes()) == t["baseline_hash"], "BASELINE_TAMPERED")
@@ -282,7 +370,9 @@ def diff_gate(root, ident):
     return result
 
 
+@governance_locked
 def regress(root, ident):
+    require_active(root, ident)
     p, t = load_task(root, ident)
     require(t["status"] == "EXECUTING", "EXECUTOR_NOT_ACTIVE")
     require(diff_gate(root, ident)["status"] == "PASS", "DIFF_REJECTED")
@@ -309,8 +399,11 @@ def regress(root, ident):
     return receipt
 
 
+@governance_locked
 def review(root, ident, actor, verdict, notes):
+    require_active(root, ident)
     p, t = load_task(root, ident)
+    require(t["status"] in ("EXECUTING", "REJECTED"), "EXECUTOR_NOT_ACTIVE")
     c = contract(p, t)
     require(actor == c["reviewer"] and actor != c["executor"], "INDEPENDENT_REVIEWER_REQUIRED")
     require(notes.strip(), "REVIEW_EVIDENCE_REQUIRED")
@@ -341,6 +434,7 @@ def append(path, obj):
         os.fsync(f.fileno())
 
 
+@governance_locked
 def compress(root, force=False):
     _, paths = memory_paths(root)
     records = []
@@ -366,7 +460,9 @@ def compress(root, force=False):
     return {"updated": True, "path": str(target), "source_count": len(sources)}
 
 
+@governance_locked
 def complete(root, ident, input_path):
+    require_active(root, ident)
     p, t = load_task(root, ident)
     require(t["status"] in ("REVIEWED", "MEMORY_PENDING"), "REVIEWER_PASS_REQUIRED")
     require(t["review"]["verdict"] == "PASS" and t["review"]["tree"] == tree(root), "STALE_REVIEW")
@@ -410,6 +506,7 @@ def complete(root, ident, input_path):
     return {"status": "COMPLETE", "memory": t["memory"]}
 
 
+@governance_locked
 def completion_gate(root):
     active = root / ".argo/runtime/active.json"
     require(active.exists(), "NO_TASK_CONTRACT")
@@ -428,6 +525,7 @@ def main():
     sp = ap.add_subparsers(dest="cmd", required=True)
     q = sp.add_parser("retrieve"); q.add_argument("feature")
     q = sp.add_parser("begin"); q.add_argument("id"); q.add_argument("--feature", required=True)
+    q = sp.add_parser("abort"); q.add_argument("id"); q.add_argument("--actor", required=True); q.add_argument("--reason", required=True)
     q = sp.add_parser("plan"); q.add_argument("id"); q.add_argument("contract")
     for command in ("execute", "diff", "regress", "status"):
         q = sp.add_parser(command); q.add_argument("id")
@@ -439,6 +537,7 @@ def main():
     try:
         if a.cmd == "retrieve": result = retrieval(root, a.feature)
         elif a.cmd == "begin": result = begin(root, a.id, a.feature)
+        elif a.cmd == "abort": result = abort(root, a.id, a.actor, a.reason)
         elif a.cmd == "plan": result = plan(root, a.id, Path(a.contract))
         elif a.cmd == "execute": result = execute(root, a.id)
         elif a.cmd == "diff": result = diff_gate(root, a.id)

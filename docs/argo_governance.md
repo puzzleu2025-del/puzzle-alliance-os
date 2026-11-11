@@ -32,6 +32,10 @@ node scripts/argo/run.mjs gate
 
 REJECT 後先修復本任務越界 diff（不得回復使用者既有工作），重新 `plan` → `execute` → `regress` → `review`。本機 runtime 是 `.argo/runtime/`，不提交；contract revision 與 baseline 保留。已完成任務的下一輪以新 ID `begin`；開始前先妥善提交／交接上輪變更，未提交檔案在新任務會被視為 preexisting dirty、不可覆蓋。
 
+無法繼續的目前任務可在確認執行者已停止後，執行 `node scripts/argo/run.mjs abort task-id --actor operator --reason "具體原因"`。此操作記錄原狀態、工作樹指紋與原因，將任務標記 ABORTED，保留原基準、收據、工作檔及 index；ABORTED 不是 COMPLETE，不能通過 gate。原任務不可復活，接續工作須新 ID begin；既有 dirty 檔案依原規則保護。記憶寫入已進入 MEMORY_PENDING 的任務不能中止，須依原流程處理部分寫入及重試。
+
+治理命令以工作樹內的 OS 鎖協調，執行中衝突會回 `GOVERNANCE_BUSY`；程序中止時鎖自動釋放，鎖檔本身保留。鎖不阻止編輯器或其他不使用治理工具的程序改檔，因此中止前仍須協調執行者停止；發現損毀或不完整證據應保留並處理，勿手動改 baseline 或假造驗收。
+
 Contract 完整範例見 `.argo/contracts/argo-governance-20260923.json`。`ALLOWED_SCOPE` 是檔案到使用者需求理由的 mapping；不可用 `*`；必要 checks 是 governance 與 application_regression。新增功能仍需合約指定該功能與鄰近頁的額外驗收，不可只跑通用 smoke。
 
 ## 測試與畫面基準

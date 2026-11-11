@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -296,6 +297,121 @@ class GovernanceTests(unittest.TestCase):
     def test_no_task_gate_refused(self):
         with self.assertRaisesRegex(ValueError, 'NO_TASK_CONTRACT'):
             g.completion_gate(self.root)
+
+    def test_abort_preserves_dirty_and_receipts_and_new_task_cannot_adopt_them(self):
+        self.start()
+        self.write('allowed.txt', 'unfinished')
+        self.write('outside.txt', 'user staged')
+        self.git('add', 'outside.txt')
+        self.write('untracked.txt', 'user untracked')
+        task_dir = g.base(self.root, self.ident)
+        protected = {p: p.read_bytes() for p in task_dir.rglob('*') if p.is_file() and p.name != 'task.json'}
+        original_baseline = (task_dir / 'baseline.json').read_bytes()
+        status = self.git('status', '--porcelain=v1', '-z')
+        index = g.index_snapshot(self.root)
+        previous_task = (task_dir / 'task.json').read_bytes()
+        result = g.abort(self.root, self.ident, 'operator', 'Interrupted by user work')
+        self.assertEqual(result['status'], 'ABORTED')
+        self.assertEqual(result['abort']['previous_task_hash'], g.sha(previous_task))
+        self.assertEqual(result['abort']['previous_status'], 'EXECUTING')
+        self.assertEqual((task_dir / 'baseline.json').read_bytes(), original_baseline)
+        for p, data in protected.items(): self.assertEqual(p.read_bytes(), data)
+        self.assertEqual(self.git('status', '--porcelain=v1', '-z'), status)
+        self.assertEqual(g.index_snapshot(self.root), index)
+        with self.assertRaisesRegex(ValueError, 'TASK_NOT_COMPLETE:ABORTED'): g.completion_gate(self.root)
+        for action in [lambda: self.plan(), lambda: g.execute(self.root, self.ident), lambda: g.diff_gate(self.root, self.ident),
+                       lambda: g.review(self.root, self.ident, 'reviewer', 'REJECT', 'old'), lambda: g.complete(self.root, self.ident, self.payload())]:
+            with self.assertRaisesRegex(ValueError, 'TASK_ABORTED'): action()
+        g.begin(self.root, 'task-2', 'different work')
+        with self.assertRaisesRegex(ValueError, 'TASK_NOT_ACTIVE'): g.diff_gate(self.root, self.ident)
+        baseline = g.read(g.base(self.root, 'task-2') / 'baseline.json')
+        self.assertTrue({'allowed.txt', 'outside.txt', 'untracked.txt'} <= set(baseline['dirty']))
+        contract = self.home / 'second.json'; contract.write_text(json.dumps(self.contract), encoding='utf-8')
+        g.plan(self.root, 'task-2', contract); g.execute(self.root, 'task-2')
+        self.write('allowed.txt', 'attempt to adopt')
+        self.assertIn('PREEXISTING_USER_WORK_CHANGED:allowed.txt', g.diff_gate(self.root, 'task-2')['errors'])
+
+    def test_abort_states_and_invalid_evidence(self):
+        self.begin()
+        for actor, reason in [('', 'reason'), ('operator', ' '), ('x' * 121, 'reason'), ('operator', 'x' * 2001)]:
+            with self.assertRaisesRegex(ValueError, 'ABORT_EVIDENCE_REQUIRED'): g.abort(self.root, self.ident, actor, reason)
+        with self.assertRaisesRegex(ValueError, 'TASK_NOT_ACTIVE'): g.abort(self.root, 'other', 'operator', 'reason')
+        self.plan()
+        g.abort(self.root, self.ident, 'operator', 'planned task no longer appropriate')
+        with self.assertRaisesRegex(ValueError, 'TASK_ABORTED'): g.abort(self.root, self.ident, 'operator', 'again')
+
+    def test_abort_investigated_and_rejected(self):
+        self.begin()
+        self.assertEqual(g.abort(self.root, self.ident, 'operator', 'investigation stopped')['abort']['previous_status'], 'INVESTIGATED')
+        self.ident = 'task-2'
+        self.start()
+        g.review(self.root, self.ident, 'reviewer', 'REJECT', 'requires rework')
+        self.assertEqual(g.abort(self.root, self.ident, 'operator', 'rejected work stopped')['abort']['previous_status'], 'REJECTED')
+
+    def test_abort_reviewed_preserves_review_and_cannot_complete(self):
+        self.reviewed()
+        p, _ = g.load_task(self.root, self.ident)
+        receipt = (p / 'review-1.json').read_bytes()
+        self.assertEqual(g.abort(self.root, self.ident, 'operator', 'reviewed task superseded')['abort']['previous_status'], 'REVIEWED')
+        self.assertEqual((p / 'review-1.json').read_bytes(), receipt)
+        with self.assertRaisesRegex(ValueError, 'TASK_ABORTED'): g.complete(self.root, self.ident, self.payload())
+
+    def test_abort_rejects_tampered_evidence(self):
+        self.start()
+        p, _ = g.load_task(self.root, self.ident)
+        original = (p / 'task.json').read_bytes()
+        (p / 'contract-1.json').write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'CONTRACT_TAMPERED'): g.abort(self.root, self.ident, 'operator', 'reason')
+        self.assertEqual((p / 'task.json').read_bytes(), original)
+
+    def test_memory_pending_and_complete_cannot_abort(self):
+        self.reviewed()
+        p, task = g.load_task(self.root, self.ident)
+        task['status'] = 'MEMORY_PENDING'; g.set_task(p, task)
+        with self.assertRaisesRegex(ValueError, 'TASK_NOT_ABORTABLE'): g.abort(self.root, self.ident, 'operator', 'reason')
+        task['status'] = 'COMPLETE'; g.set_task(p, task)
+        with self.assertRaisesRegex(ValueError, 'TASK_NOT_ABORTABLE'): g.abort(self.root, self.ident, 'operator', 'reason')
+
+    def test_abort_failure_does_not_mutate_task_or_baseline(self):
+        self.start()
+        p, _ = g.load_task(self.root, self.ident)
+        original = (p / 'task.json').read_bytes()
+        baseline = (p / 'baseline.json').read_bytes()
+        with patch.object(g, 'set_task', side_effect=OSError('simulated write failure')):
+            with self.assertRaisesRegex(OSError, 'simulated'): g.abort(self.root, self.ident, 'operator', 'reason')
+        self.assertEqual((p / 'task.json').read_bytes(), original)
+        self.assertEqual((p / 'baseline.json').read_bytes(), baseline)
+        self.assertEqual(g.abort(self.root, self.ident, 'operator', 'retry')['status'], 'ABORTED')
+
+    def test_cross_process_lock_busy_and_crash_releases_lock(self):
+        self.start()
+        ready = self.home / 'locked'
+        script = "import sys,time; from pathlib import Path; sys.path.insert(0,sys.argv[1]); import govern as g; " \
+                 "g.governance_locked(lambda root: (Path(sys.argv[3]).write_text('ready'),time.sleep(60)))(Path(sys.argv[2]))"
+        proc = subprocess.Popen([sys.executable, '-c', script, str(ROOT / 'scripts/argo'), str(self.root), str(ready)])
+        try:
+            deadline = time.monotonic() + 15
+            while not ready.exists() and time.monotonic() < deadline:
+                if proc.poll() is not None: self.fail('lock holder exited')
+                time.sleep(0.05)
+            self.assertTrue(ready.exists())
+            with self.assertRaisesRegex(ValueError, 'GOVERNANCE_BUSY'): g.abort(self.root, self.ident, 'operator', 'reason')
+            self.assertEqual(self.status(), 'EXECUTING')
+        finally:
+            proc.kill(); proc.wait(timeout=10)
+        self.assertEqual(g.abort(self.root, self.ident, 'operator', 'reason')['status'], 'ABORTED')
+
+    def test_competing_begin_processes_do_not_overwrite_active(self):
+        script = ROOT / 'scripts/argo/govern.py'
+        processes = [subprocess.Popen([sys.executable, str(script), '--root', str(self.root), 'begin', ident, '--feature', 'race'], stdout=subprocess.PIPE, stderr=subprocess.PIPE) for ident in ('race-1', 'race-2')]
+        results = []
+        for process in processes:
+            out, err = process.communicate(timeout=30)
+            results.append((process.returncode, out, err))
+        self.assertEqual(sum(code == 0 for code, _, _ in results), 1)
+        active = g.read(self.root / '.argo/runtime/active.json')['task_id']
+        self.assertIn(active, ('race-1', 'race-2'))
+        self.assertEqual(g.load_task(self.root, active)[1]['status'], 'INVESTIGATED')
 
     def test_complete_and_gate_with_memory_readback(self):
         self.reviewed()

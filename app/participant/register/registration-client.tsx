@@ -86,7 +86,7 @@ function RegistrationFlow({ slug, identity, onBack }: { slug: string; identity: 
     return send(body, false);
   }
 
-  if (!loaded) return <main className="signin-page"><section className="signin-card">{error ? <><p role="alert">{error}</p><button type="button" onClick={onBack}>返回選擇身分</button></> : <p>正在載入報名資料…</p>}</section></main>;
+  if (!loaded) return <main className="signin-page"><section className="signin-card">{error ? <><p role="alert">{error}</p>{identity === "participant" && <form method="post" action="/api/participant/auth/start"><input type="hidden" name="slug" value={slug} /><button type="submit">使用 Google 登入</button></form>}<button type="button" onClick={onBack}>返回選擇身分</button></> : <p>正在載入報名資料…</p>}</section></main>;
   if (completed) return <main className="signin-page"><section className="signin-card"><p role="status">報名已送出</p><h1>{loaded.form.title}</h1><p>{loaded.form.confirmationMessage || "我們已收到你的資料，後續資訊將由活動團隊通知。"}</p></section></main>;
   return <>{error && <p role="alert">{error}</p>}{uncertain && <button type="button" disabled={retrying} onClick={() => { if (retry.current) void send(retry.current, true); }}>{retrying ? "確認中…" : "重試原報名內容"}</button>}<fieldset disabled={uncertain} style={{ border: 0, padding: 0, margin: 0 }}><RegistrationPublic form={loaded.form} activityName={loaded.activityName} initialValues={loaded.values} onSubmit={submit} /></fieldset></>;
 }

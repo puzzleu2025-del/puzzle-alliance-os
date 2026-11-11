@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 const slug = "a".repeat(32);
 const form = { id: "f1", activityId: "a1", title: "Test form", status: "open", privacyNotice: "Notice", fields: [{ id: "name", label: "Name", type: "short_text", required: true, profileKey: "displayName", sensitive: true }] };
@@ -11,12 +13,13 @@ const publicData = { form, activity: { name: "Activity" }, formVersion: 7 };
 
 test("isolated browser: unified registration and legacy compatibility", { timeout: 120000 }, async (t) => {
   const virtual = "virtual:registration-test";
-  const server = await createServer({ configFile: false, root: process.cwd(), optimizeDeps: { noDiscovery: true, include: ["react", "react-dom/client", "react/jsx-dev-runtime"] }, resolve: { alias: { "@": process.cwd() } }, plugins: [react(), {
+  const cacheDir = mkdtempSync(path.join(tmpdir(), "puzzle-registration-vite-"));
+  const server = await createServer({ configFile: false, cacheDir, root: process.cwd(), optimizeDeps: { noDiscovery: true, include: ["react", "react-dom/client", "react/jsx-dev-runtime"] }, resolve: { alias: { "@": process.cwd() } }, plugins: [react(), {
     name: "registration-test",
     resolveId(id) { if (id === virtual || id === "/" + virtual) return "\0" + virtual; },
     load(id) { if (id === "\0" + virtual) return `import React from 'react'; import {createRoot} from 'react-dom/client'; import Unified from '/app/participant/register/registration-client.tsx'; import Legacy from '/app/r/[slug]/registration-client.tsx'; createRoot(document.getElementById('root')).render(location.pathname === '/legacy' ? React.createElement(Legacy,{slug:'${slug}'}) : React.createElement(Unified,{slug:'${slug}'}));`; },
     configureServer(s) { s.middlewares.use(async (req, res, next) => { if (req.url === "/test" || req.url === "/legacy") { res.setHeader("Content-Type", "text/html"); res.end(await s.transformIndexHtml(req.url, `<html><head></head><body><div id="root"></div><script type="module" src="/${virtual}"></script></body></html>`)); } else next(); }); },
-  }], server: { host: "127.0.0.1", port: 0, strictPort: true } });
+  }], server: { host: "127.0.0.1", port: 18000 + Math.floor(Math.random() * 40000), strictPort: false } });
   await server.listen();
   const port = server.httpServer.address().port;
   const pw = process.env.REGRESSION_PLAYWRIGHT || path.join(process.env.USERPROFILE || process.env.HOME, ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs");
@@ -33,7 +36,8 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       await page.route("**/api/**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
-        calls.push({ path: url.pathname, method: request.method(), headers: request.headers(), body: request.postDataJSON() });
+        calls.push({ path: url.pathname, method: request.method(), headers: request.headers(), body: url.pathname === "/api/participant/auth/start" ? request.postData() : request.postDataJSON() });
+        if (url.pathname === "/api/participant/auth/start") return route.fulfill({ status: 503, contentType: "text/html; charset=utf-8", body: "登入目前無法使用" });
         if (url.pathname.startsWith("/api/public/registrations/")) {
           return route.fulfill({ json: request.method() === "GET" ? publicData : { ok: true } });
         }
@@ -68,6 +72,20 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       assert.equal(post.path, `/api/public/registrations/${slug}`);
       assert.equal(post.body.answers.name, "Legacy");
       assert.equal(post.body.website, "");
+      await page.close();
+    });
+    await t.test("participant login uses native POST with only the slug", async () => {
+      const { page, calls } = await setup({ prefillStatus: 503 });
+      await page.getByRole("button", { name: "參與者", exact: true }).click();
+      await page.getByRole("alert").waitFor();
+      const login = page.getByRole("button", { name: "使用 Google 登入" });
+      assert.equal(await login.locator("xpath=ancestor::form").getAttribute("method"), "post");
+      await login.click();
+      await page.getByText("登入目前無法使用").waitFor();
+      const request = calls.find(c => c.path === "/api/participant/auth/start");
+      assert.equal(request.method, "POST");
+      assert.match(request.headers["content-type"], /^application\/x-www-form-urlencoded/);
+      assert.equal(request.body, `slug=${slug}`);
       await page.close();
     });
     for (const [identity, label, name] of [["member", "會員", "Member"], ["participant", "參與者", "Participant"]]) {
@@ -166,5 +184,5 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       assert.equal(records.size, 1);
       await page.close();
     });
-  } finally { if (browser) await browser.close(); await server.close(); }
+  } finally { if (browser) await browser.close(); await server.close(); rmSync(cacheDir, { recursive: true, force: true }); }
 });

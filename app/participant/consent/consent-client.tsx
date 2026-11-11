@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 type Terms = { version: string; content: string };
 
-export default function ConsentClient() {
+export default function ConsentClient({ returnSlug = null }: { returnSlug?: string | null }) {
   const [terms, setTerms] = useState<Terms | null>(null);
   const [checked, setChecked] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -48,7 +48,7 @@ export default function ConsentClient() {
 
   return <main className="auth-form">
     <h1>聯盟名單同意事項</h1>
-    {complete ? <p className="auth-success" role="status">已完成同意。</p> : <>
+    {complete ? <><p className="auth-success" role="status">已完成同意。</p>{typeof returnSlug === "string" && /^[a-f0-9]{32}$/.test(returnSlug) && <a href={`/participant/register?slug=${returnSlug}`}>返回報名</a>}</> : <>
       {terms && <form onSubmit={submit}>
         <p>條款版本：{terms.version}</p>
         <div style={{ whiteSpace: "pre-wrap" }}>{terms.content}</div>

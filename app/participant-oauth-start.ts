@@ -66,6 +66,25 @@ export async function participantOauthStart(
   if (requestOrigin !== config.origin || request.headers.get("Origin") !== config.origin) return error(403);
 
   try {
+    let returnPath = "/participant";
+    if (request.body) {
+      if (!/^application\/x-www-form-urlencoded(?:\s*;\s*charset=utf-8)?$/i.test(request.headers.get("Content-Type") ?? "")) return error(400);
+      const length = request.headers.get("Content-Length");
+      if (length !== null && (!/^\d+$/.test(length) || Number(length) > 37)) return error(400);
+      const reader = request.body.getReader();
+      let bytes = 0, body = "";
+      try {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          bytes += part.value.byteLength;
+          if (bytes > 37) { await reader.cancel().catch(() => undefined); return error(400); }
+          body += new TextDecoder("utf-8", { fatal: true }).decode(part.value);
+        }
+      } catch { return error(400); } finally { reader.releaseLock(); }
+      if (!/^slug=[a-f0-9]{32}$/.test(body)) return error(400);
+      returnPath = `/participant/register?${body}`;
+    }
     // Cloudflare supplies this header at the edge. Forwarded headers and body
     // values are intentionally ignored; direct/local requests share a bucket.
     const address = request.headers.get("cf-connecting-ip") ?? "";
@@ -78,7 +97,7 @@ export async function participantOauthStart(
     await db.prepare(
       "DELETE FROM participant_oauth_transactions WHERE state_hash IN (SELECT state_hash FROM participant_oauth_transactions WHERE expires_at<=? ORDER BY expires_at LIMIT ?)",
     ).bind(nowMs, CLEANUP_LIMIT).run();
-    const transaction = await beginParticipantOauth(db, "/participant", nowMs);
+    const transaction = await beginParticipantOauth(db, returnPath, nowMs);
     const target = new URL(GOOGLE_AUTHORIZE);
     target.searchParams.set("client_id", config.clientId);
     target.searchParams.set("redirect_uri", config.callbackUri);

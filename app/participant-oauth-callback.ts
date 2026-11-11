@@ -157,7 +157,8 @@ export async function participantOauthCallback(
       await db.prepare("DELETE FROM participant_pending_identities WHERE token_hash=?").bind(await secretHash(pending.token)).run();
       return failure(503);
     }
-    const headers = new Headers({ ...HEADERS, Location: "/participant/consent" });
+    const registration = /^\/participant\/register\?slug=([a-f0-9]{32})$/.exec(transaction.returnPath);
+    const headers = new Headers({ ...HEADERS, Location: registration ? `/participant/consent?slug=${registration[1]}` : "/participant/consent" });
     headers.append("Set-Cookie", participantPendingCookie(pending.token));
     headers.append("Set-Cookie", clearParticipantOauthBindingCookie());
     return new Response(null, { status: 303, headers });

@@ -87,8 +87,7 @@ test("start uses only trusted configured redirect and returns PKCE bound to cook
   const { sqlite, db } = fixture();
   try {
     const response = await participantOauthStart(request({
-      headers: { "Content-Type": "application/json", "cf-connecting-ip": "203.0.113.1" },
-      body: JSON.stringify({ clientId: "attacker", callbackUri: "https://evil.example/callback", returnPath: "//evil.example", consentVersion: "attacker" }),
+      headers: { "cf-connecting-ip": "203.0.113.1" },
     }), db, config, now);
     assert.equal(response.status, 303);
     assert.equal(response.headers.get("cache-control"), "no-store");
@@ -112,6 +111,48 @@ test("start uses only trusted configured redirect and returns PKCE bound to cook
     assert.ok(!location.href.includes(tx.code_verifier));
     assert.equal(count(sqlite, "participant_consents"), 0);
     assert.equal(count(sqlite, "participant_sessions"), 0);
+  } finally { sqlite.close(); }
+});
+
+test("registration slug is strictly bounded and cannot select an external destination", async () => {
+  const { sqlite, db } = fixture();
+  try {
+    const slug = "a".repeat(32);
+    const valid = await participantOauthStart(request({ headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `slug=${slug}` }), db, config, now);
+    assert.equal(valid.status, 303);
+    assert.equal(sqlite.prepare("SELECT return_path FROM participant_oauth_transactions").get().return_path, `/participant/register?slug=${slug}`);
+    for (const [type, body] of [
+      ["application/json", JSON.stringify({ returnPath: "//evil.example" })],
+      ["application/x-www-form-urlencoded", `slug=${slug}&next=//evil.example`],
+      ["application/x-www-form-urlencoded", `slug=${slug}&slug=${slug}`],
+      ["application/x-www-form-urlencoded", "slug=" + "A".repeat(32)],
+      ["application/x-www-form-urlencoded", "slug=%61" + "a".repeat(31)],
+      ["application/x-www-form-urlencoded", "slug=" + "a".repeat(33)],
+    ]) {
+      const response = await participantOauthStart(request({ headers: { "Content-Type": type }, body }), db, config, now);
+      assert.equal(response.status, 400);
+      assert.equal(response.headers.get("location"), null);
+    }
+    assert.equal(count(sqlite, "participant_oauth_transactions"), 1);
+  } finally { sqlite.close(); }
+});
+
+test("segmented form body cannot exceed its limit even with a false content length", async () => {
+  const { sqlite, db } = fixture();
+  try {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({ start(controller) {
+      controller.enqueue(encoder.encode("slug=" + "a".repeat(20)));
+      controller.enqueue(encoder.encode("a".repeat(13)));
+      controller.close();
+    } });
+    const req = new Request(origin + "/api/participant/auth/start", {
+      method: "POST", duplex: "half", body: stream,
+      headers: { Origin: origin, "Content-Type": "application/x-www-form-urlencoded", "Content-Length": "1" },
+    });
+    const response = await participantOauthStart(req, db, config, now);
+    assert.equal(response.status, 400);
+    assert.equal(count(sqlite, "participant_oauth_transactions"), 0);
   } finally { sqlite.close(); }
 });
 

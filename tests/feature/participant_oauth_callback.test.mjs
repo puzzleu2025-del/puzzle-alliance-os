@@ -153,6 +153,19 @@ test("successful callback uses fixed token endpoint, issues pending only, and ca
   } finally { sqlite.close(); }
 });
 
+test("registration transaction redirects only to fixed consent path with its slug", async () => {
+  const { sqlite, db } = fixture();
+  try {
+    const slug = "a".repeat(32);
+    const tx = await beginParticipantOauth(db, `/participant/register?slug=${slug}`, now);
+    const fetcher = async () => new Response(JSON.stringify({ id_token: await signedToken(tx.nonce) }), { status: 200 });
+    const response = await participantOauthCallback(request(tx.state, participantOauthBindingCookie(tx.binding)), db, config, services("", { fetcher }));
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), `/participant/consent?slug=${slug}`);
+    assert.equal(count(sqlite, "participant_sessions"), 0);
+  } finally { sqlite.close(); }
+});
+
 test("missing or mismatched terms leave transaction unconsumed", async () => {
   for (const published of [false, true]) {
     const { sqlite, db } = fixture(published);

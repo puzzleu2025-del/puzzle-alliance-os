@@ -9,7 +9,8 @@ export const OAUTH_TRANSACTION_SECONDS = 5 * 60;
 function safeReturnPath(path: unknown): path is string {
   return typeof path === "string" && path.length <= 256 &&
     !/[\x00-\x20\x7f]/.test(path) &&
-    /^\/participant(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path);
+    (/^\/participant(?:\/[A-Za-z0-9_-]+)*\/?$/.test(path) ||
+      /^\/participant\/register\?slug=[a-f0-9]{32}$/.test(path));
 }
 
 function validTime(nowMs: number): boolean {

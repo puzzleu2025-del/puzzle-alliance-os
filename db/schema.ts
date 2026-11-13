@@ -11,8 +11,11 @@ export const members = sqliteTable("members", {
 ]);
 export const workspaceStates = sqliteTable("workspace_states", {
   id: integer("id").primaryKey(), data: text("data").notNull(), version: integer("version").notNull(),
-  updatedAt: text("updated_at").notNull(), updatedBy: text("updated_by").notNull(),
+  updatedAt: text("updated_at").notNull(), updatedBy: text("updated_by").notNull(), writeNonce: text("write_nonce"),
 });
+export const meetings = sqliteTable("meetings", {
+  id: text("id").primaryKey(), activityId: text("activity_id").notNull(), position: integer("position").notNull(), data: text("data").notNull(),
+}, (table) => [index("meetings_activity_idx").on(table.activityId)]);
 export const auditLogs = sqliteTable("audit_logs", {
   id: integer("id").primaryKey({ autoIncrement: true }), actorId: text("actor_id").notNull(), action: text("action").notNull(),
   entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), createdAt: text("created_at").notNull(),

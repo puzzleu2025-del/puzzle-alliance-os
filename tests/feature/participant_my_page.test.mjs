@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import { build } from "vite";
 import { createServer } from "node:http";
 import react from "@vitejs/plugin-react";
+import sharp from "sharp";
+import decode from "../fixtures/jsqr.cjs";
 
 test("isolated browser: own registrations states, pagination and identity switch", { timeout: 120000 }, async t => {
   const virtual = "virtual:my-page-test";
@@ -51,7 +53,7 @@ test("isolated browser: own registrations states, pagination and identity switch
       await page.getByText("Second", { exact: true }).waitFor();
       assert.deepEqual(calls.map(c => [c.method, c.identity, c.body]), [["POST", "member", { cursor: null }], ["POST", "member", { cursor: next }]]);
       assert.equal(await page.getByRole("button", { name: "載入更多" }).count(), 0);
-      assert.equal(await page.getByText(/QR/).count(), 0);
+      assert.equal(await page.getByRole("img", { name: "個人簽到 QR 碼" }).count(), 0);
       await page.close();
     });
     await t.test("empty, temporary failure and retry", async () => {
@@ -140,6 +142,47 @@ test("isolated browser: own registrations states, pagination and identity switch
       await page.getByText("登入已失效，請重新登入後再試。").waitFor();
       assert.equal(await page.getByText("Private").count(), 0);
       assert.equal(await page.getByText(/已撤回同意/).count(), 0);
+      await page.close();
+    });
+    await t.test("QR issuance can recover after a failed request", async () => {
+      const { page } = await setup(route => route.fulfill({ json: { registrations: [entry("a", "Activity")], nextCursor: null } }));
+      let attempts = 0;
+      await page.route('**/api/participant/qr', route => {
+        attempts++;
+        return attempts === 1 ? route.fulfill({ status: 503, json: { error: 'unavailable' } }) :
+          route.fulfill({ json: { token: '0123456789abcdef'.repeat(4) } });
+      });
+      await page.getByRole('button', { name: '參與者', exact: true }).click();
+      await page.getByText('Activity').waitFor();
+      await page.getByRole('button', { name: '顯示 QR' }).click();
+      await page.getByRole('alert').getByText('目前無法顯示 QR，請稍後重試或聯絡工作人員。').waitFor();
+      await page.getByRole('button', { name: '重試顯示 QR' }).click();
+      await page.getByRole('img', { name: '個人簽到 QR 碼' }).waitFor();
+      assert.equal(attempts, 2);
+      await page.close();
+    });
+    await t.test("own QR is rendered locally and its image decodes to the issued value", async () => {
+      const token = '0123456789abcdef'.repeat(4);
+      const { page } = await setup(route => route.fulfill({ json: { registrations: [entry("a", "Activity")], nextCursor: null } }));
+      let issued = 0;
+      await page.route('**/api/participant/qr', route => {
+        issued++;
+        assert.deepEqual(route.request().postDataJSON(), { submissionId: 'a' });
+        assert.equal(route.request().headers()['x-participant-identity'], 'participant');
+        return route.fulfill({ json: { token } });
+      });
+      await page.getByRole('button', { name: '參與者', exact: true }).click();
+      await page.getByText('Activity').waitFor();
+      await page.getByRole('button', { name: '顯示 QR' }).click();
+      const image = page.getByRole('img', { name: '個人簽到 QR 碼' });
+      await image.waitFor();
+      const { data, info } = await sharp(await image.screenshot()).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      assert.equal(decode(new Uint8ClampedArray(data), info.width, info.height)?.data, token);
+      assert.equal((await page.locator('body').innerText()).includes(token), false);
+      assert.equal(page.url().includes(token), false);
+      assert.equal(issued, 1);
+      await page.getByRole('button', { name: '會員', exact: true }).click();
+      assert.equal(await image.count(), 0);
       await page.close();
     });
   } finally { if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }

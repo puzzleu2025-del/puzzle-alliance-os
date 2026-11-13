@@ -9,6 +9,7 @@ type StartConfig = {
   origin: string;
   callbackUri: string;
   consentVersion: string;
+  trustedCloudflareEdge?: boolean;
 };
 
 const GOOGLE_AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -22,7 +23,7 @@ function error(status: number): Response {
 }
 
 function validConfig(config: StartConfig | null): config is StartConfig {
-  if (!config || typeof config.clientId !== "string" || config.clientId.length > 200 ||
+  if (!config || (config.trustedCloudflareEdge !== undefined && typeof config.trustedCloudflareEdge !== "boolean") || typeof config.clientId !== "string" || config.clientId.length > 200 ||
       !/^[0-9]{1,32}-[a-z0-9]{1,128}\.apps\.googleusercontent\.com$/.test(config.clientId) ||
       typeof config.origin !== "string" || typeof config.callbackUri !== "string" ||
       typeof config.consentVersion !== "string" || config.consentVersion.length > 80 ||
@@ -42,11 +43,11 @@ function validConfig(config: StartConfig | null): config is StartConfig {
 }
 
 /**
- * Internal start handler for a future, fully configured integration.
+ * Start handler called only with trusted server configuration.
  * The caller supplies trusted server configuration. The consentVersion is a
  * configuration precondition only; invoking this function does not record or
- * imply user consent. Public routing remains disabled until callback,
- * authorization and consent flows are implemented and reviewed.
+ * imply user consent. The route must remain unavailable until its server
+ * configuration and the complete callback/consent flow are ready.
  */
 export async function participantOauthStart(
   request: Request,
@@ -82,20 +83,28 @@ export async function participantOauthStart(
           body += new TextDecoder("utf-8", { fatal: true }).decode(part.value);
         }
       } catch { return error(400); } finally { reader.releaseLock(); }
-      if (!/^slug=[a-f0-9]{32}$/.test(body)) return error(400);
-      returnPath = `/participant/register?${body}`;
+      if (body && !/^slug=[a-f0-9]{32}$/.test(body)) return error(400);
+      if (body) returnPath = `/participant/register?${body}`;
     }
-    // Cloudflare supplies this header at the edge. Forwarded headers and body
-    // values are intentionally ignored; direct/local requests share a bucket.
-    const address = request.headers.get("cf-connecting-ip") ?? "";
+    // Trust the edge header only when the deployment explicitly guarantees it.
+    const address = config.trustedCloudflareEdge === true ? request.headers.get("cf-connecting-ip") ?? "" : "";
     const source = address.length <= 45 && /^[0-9a-f:.]+$/i.test(address) ? address.toLowerCase() : "shared";
     const rateKey = "participant-oauth-start:" + await secretHash(source);
+    await db.prepare(
+      "DELETE FROM auth_attempts WHERE key IN (SELECT key FROM auth_attempts WHERE key>=? AND key<? AND window_start<=? ORDER BY window_start LIMIT ?)",
+    ).bind("participant-oauth-start:", "participant-oauth-start:~", nowMs - RATE_WINDOW_MS, CLEANUP_LIMIT).run();
     const rate = await db.prepare(
       "INSERT INTO auth_attempts (key,attempts,window_start) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN window_start<=? THEN 1 ELSE attempts+1 END,window_start=CASE WHEN window_start<=? THEN excluded.window_start ELSE window_start END RETURNING attempts",
     ).bind(rateKey, nowMs, nowMs - RATE_WINDOW_MS, nowMs - RATE_WINDOW_MS).first<{ attempts: number }>();
     if (!rate || rate.attempts > RATE_LIMIT) return error(429);
     await db.prepare(
       "DELETE FROM participant_oauth_transactions WHERE state_hash IN (SELECT state_hash FROM participant_oauth_transactions WHERE expires_at<=? ORDER BY expires_at LIMIT ?)",
+    ).bind(nowMs, CLEANUP_LIMIT).run();
+    await db.prepare(
+      "DELETE FROM participant_pending_identities WHERE token_hash IN (SELECT token_hash FROM participant_pending_identities WHERE expires_at<=? ORDER BY expires_at LIMIT ?)",
+    ).bind(nowMs, CLEANUP_LIMIT).run();
+    await db.prepare(
+      "DELETE FROM participant_sessions WHERE token_hash IN (SELECT token_hash FROM participant_sessions WHERE expires_at<=? ORDER BY expires_at LIMIT ?)",
     ).bind(nowMs, CLEANUP_LIMIT).run();
     const transaction = await beginParticipantOauth(db, returnPath, nowMs);
     const target = new URL(GOOGLE_AUTHORIZE);

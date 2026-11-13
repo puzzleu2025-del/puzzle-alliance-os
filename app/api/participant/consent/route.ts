@@ -1,11 +1,6 @@
+// @ts-expect-error TS5097: native TypeScript tests require the extension.
+import { participantService } from "../../../participant-service.ts";
+
 export const dynamic = "force-dynamic";
-
-async function disabled(): Promise<Response> {
-  return Response.json({ error: "目前無法使用，請稍後再試" }, {
-    status: 503,
-    headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
-  });
-}
-
-export const GET = disabled;
-export const POST = disabled;
+export async function GET(request: Request): Promise<Response> { return participantService(request, "consent" ); }
+export async function POST(request: Request): Promise<Response> { return participantService(request, "consent" ); }

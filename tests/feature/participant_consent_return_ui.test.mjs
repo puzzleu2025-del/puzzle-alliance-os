@@ -53,6 +53,7 @@ test("consent return link is fixed, validated and only shown on success", { time
       const link = page.getByRole("link", { name: "返回報名" });
       assert.equal(await link.count(), valid ? 1 : 0);
       if (valid) assert.equal(await link.getAttribute("href"), `/participant/register?slug=${slug}`);
+      else assert.equal(await page.getByRole("link", { name: "查看我的報名與 QR" }).getAttribute("href"), "/participant/my");
       await page.close();
     });
     await t.test("failure never exposes completion or return", async () => {

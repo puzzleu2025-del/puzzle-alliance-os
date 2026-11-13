@@ -2,10 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createServer } from "vite";
+import { build } from "vite";
+import { createServer } from "node:http";
 import react from "@vitejs/plugin-react";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 
 const slug = "a".repeat(32);
 const form = { id: "f1", activityId: "a1", title: "Test form", status: "open", privacyNotice: "Notice", fields: [{ id: "name", label: "Name", type: "short_text", required: true, profileKey: "displayName", sensitive: true }] };
@@ -13,15 +12,18 @@ const publicData = { form, activity: { name: "Activity" }, formVersion: 7 };
 
 test("isolated browser: unified registration and legacy compatibility", { timeout: 120000 }, async (t) => {
   const virtual = "virtual:registration-test";
-  const cacheDir = mkdtempSync(path.join(tmpdir(), "puzzle-registration-vite-"));
-  const server = await createServer({ configFile: false, cacheDir, root: process.cwd(), optimizeDeps: { noDiscovery: true, include: ["react", "react-dom/client", "react/jsx-dev-runtime"] }, resolve: { alias: { "@": process.cwd() } }, plugins: [react(), {
+  const bundle = await build({ configFile: false, logLevel: "error", root: process.cwd(), build: { write: false, minify: false, rollupOptions: { input: virtual, output: { format: "iife" } } }, resolve: { alias: { "@": process.cwd() } }, plugins: [react(), {
     name: "registration-test",
     resolveId(id) { if (id === virtual || id === "/" + virtual) return "\0" + virtual; },
     load(id) { if (id === "\0" + virtual) return `import React from 'react'; import {createRoot} from 'react-dom/client'; import Unified from '/app/participant/register/registration-client.tsx'; import Legacy from '/app/r/[slug]/registration-client.tsx'; createRoot(document.getElementById('root')).render(location.pathname === '/legacy' ? React.createElement(Legacy,{slug:'${slug}'}) : React.createElement(Unified,{slug:'${slug}'}));`; },
-    configureServer(s) { s.middlewares.use(async (req, res, next) => { if (req.url === "/test" || req.url === "/legacy") { res.setHeader("Content-Type", "text/html"); res.end(await s.transformIndexHtml(req.url, `<html><head></head><body><div id="root"></div><script type="module" src="/${virtual}"></script></body></html>`)); } else next(); }); },
-  }], server: { host: "127.0.0.1", port: 18000 + Math.floor(Math.random() * 40000), strictPort: false } });
-  await server.listen();
-  const port = server.httpServer.address().port;
+  }] });
+  const code = (Array.isArray(bundle) ? bundle[0] : bundle).output.find(item => item.type === "chunk").code;
+  const server = createServer((req, res) => {
+    res.setHeader("Content-Type", req.url === "/app.js" ? "text/javascript; charset=utf-8" : "text/html; charset=utf-8");
+    res.end(req.url === "/app.js" ? code : '<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script src="/app.js"></script></body></html>');
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
   const pw = process.env.REGRESSION_PLAYWRIGHT || path.join(process.env.USERPROFILE || process.env.HOME, ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs");
   const { chromium } = await import(pathToFileURL(pw));
   let browser;
@@ -57,6 +59,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
           if (options.failFirst && count === 1) return route.abort("failed");
           return route.fulfill({ json: { receiptId: records.get(body.idempotencyKey).receiptId } });
         }
+        if (url.pathname === "/api/participant/qr") return route.fulfill({ json: { token: 'a'.repeat(64) } });
         return route.abort();
       });
       await page.goto(`http://127.0.0.1:${port}/${options.legacy ? "legacy" : "test"}`);
@@ -184,5 +187,18 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       assert.equal(records.size, 1);
       await page.close();
     });
-  } finally { if (browser) await browser.close(); await server.close(); rmSync(cacheDir, { recursive: true, force: true }); }
+    await t.test("successful registration shows its own QR without revealing the token", async () => {
+      const { page, calls } = await setup();
+      await page.getByRole('button', { name: '會員', exact: true }).click();
+      await page.getByLabel('Name').waitFor();
+      await page.locator('#registration-privacy-consent').check();
+      await page.getByRole('button', { name: '送出報名' }).click();
+      await page.getByRole('img', { name: '個人簽到 QR 碼' }).waitFor();
+      const qr = calls.find(call => call.path === '/api/participant/qr');
+      assert.deepEqual(qr.body, { submissionId: 'receipt' });
+      assert.equal(qr.headers['x-participant-identity'], 'member');
+      assert.equal((await page.locator('body').innerText()).includes('a'.repeat(64)), false);
+      await page.close();
+    });
+  } finally { if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }
 });

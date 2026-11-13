@@ -93,7 +93,7 @@ function secureHeaders(response) {
   assert.equal(response.headers.get("location"), null);
 }
 
-test("all external POST routes remain hard disabled", async () => {
+test("external POST routes fail closed when the Workers environment is unavailable", async () => {
   for (const handler of [disabledRegistration, disabledQr, disabledRevoke, disabledPrefill, disabledMine]) {
     const response = await handler();
     assert.equal(response.status, 503);

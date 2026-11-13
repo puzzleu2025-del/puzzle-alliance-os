@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import ParticipantQrView from "../../participant-qr-view";
 
 type Identity = "member" | "participant";
 type Cursor = { submittedAt: string; submissionId: string };
@@ -26,6 +27,7 @@ function List({ identity }: { identity: Identity }) {
   const [withdrawBusy, setWithdrawBusy] = useState(false);
   const [withdrawn, setWithdrawn] = useState(false);
   const [withdrawError, setWithdrawError] = useState("");
+  const [qrId, setQrId] = useState("");
   const alive = useRef(false);
   const pending = useRef(false);
   const withdrawing = useRef(false);
@@ -81,7 +83,7 @@ function List({ identity }: { identity: Identity }) {
       }
       if (alive.current) {
         controller.current?.abort();
-        setRows([]); setCursor(null); setLoaded(false); setError(""); setWithdrawn(true);
+        setRows([]); setCursor(null); setLoaded(false); setError(""); setQrId(""); setWithdrawn(true);
       }
     } catch (reason) {
       if (alive.current) setWithdrawError(reason instanceof Error ? reason.message : "目前無法撤回，請稍後再試。");
@@ -96,7 +98,7 @@ function List({ identity }: { identity: Identity }) {
     {busy && <p role="status">載入中…</p>}
     {error && <><p role="alert">{error}</p><button type="button" disabled={busy} onClick={() => void load(loaded ? cursor : null)}>重試</button></>}
     {loaded && rows.length === 0 && <p>目前沒有報名紀錄。</p>}
-    {rows.length > 0 && <ul>{rows.map(row => <li key={row.submissionId}><strong>{row.title}</strong><br /><time>{row.submittedAt}</time></li>)}</ul>}
+    {rows.length > 0 && <ul>{rows.map(row => <li key={row.submissionId}><strong>{row.title}</strong><br /><time>{row.submittedAt}</time><br /><button type="button" onClick={() => setQrId(row.submissionId)}>顯示 QR</button>{qrId === row.submissionId && <ParticipantQrView submissionId={row.submissionId} identity={identity} />}</li>)}</ul>}
     {loaded && cursor && !error && <button type="button" disabled={busy} onClick={() => void load(cursor)}>載入更多</button>}
     {identity === "participant" && <div>
       {!withdrawOpen ? <button type="button" onClick={() => setWithdrawOpen(true)}>撤回加入名單同意</button> : <>

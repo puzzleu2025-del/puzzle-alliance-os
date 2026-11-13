@@ -85,6 +85,13 @@
       "when": 1794075707056,
       "tag": "0011_registration_qr_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794578511361,
+      "tag": "0012_meetings_table",
+      "breakpoints": true
     }
   ]
 }

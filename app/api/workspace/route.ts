@@ -16,10 +16,10 @@ async function authorize() {
 
 export async function GET() {
   const auth = await authorize(); if (auth.error) return auth.error;
-  const row = await env.DB!.prepare("SELECT data,version,updated_at FROM workspace_states WHERE id = 1").first<{data:string;version:number;updated_at:string}>();
+  const row = await readWorkspace();
   const audit = await env.DB!.prepare("SELECT a.id, COALESCE(m.display_name,a.actor_id) AS actor, a.action, a.created_at AS createdAt FROM audit_logs a LEFT JOIN members m ON m.user_id=a.actor_id ORDER BY a.id DESC LIMIT 50").all();
   const people = await env.DB!.prepare("SELECT user_id AS id,display_name AS name,username,role FROM members WHERE status='active' ORDER BY display_name,username").all();
-  return Response.json({ state: readState(row?.data), version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: auth.user!.role, audit: audit.results, memberOptions: people.results }, { headers: noStore });
+  return Response.json({ state: workspaceState(row), version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: auth.user!.role, audit: audit.results, memberOptions: people.results }, { headers: noStore });
 }
 
 export async function PUT(request: Request) {
@@ -31,10 +31,10 @@ export async function PUT(request: Request) {
   if (!validState(body.state) || !Number.isInteger(body.version) || JSON.stringify(body.state).length > 750_000) return Response.json({ error: "資料格式不完整" }, { status: 400 });
   const action = body.action ?? "update_workspace";
   if (!allowedActions.has(action)) return Response.json({ error: "操作類型無效" }, { status: 400 });
-  const current = await env.DB!.prepare("SELECT data,version FROM workspace_states WHERE id = 1").first<{data:string;version:number}>();
+  const current = await readWorkspace();
   const currentVersion = current?.version ?? 0;
-  if (body.version !== currentVersion) return Response.json({ state: readState(current?.data), version: currentVersion }, { status: 409, headers: noStore });
-  const previousState = readState(current?.data);
+  const previousState = workspaceState(current);
+  if (body.version !== currentVersion) return Response.json({ state: previousState, version: currentVersion }, { status: 409, headers: noStore });
   const nextState = coreState(body.state);
   const matchingNames = !managerRole(auth.user!.role)
     ? await env.DB!.prepare("SELECT user_id FROM members WHERE status='active' AND display_name=?").bind(auth.user!.displayName).all<{ user_id: string }>()
@@ -65,7 +65,8 @@ export async function PUT(request: Request) {
     const error = rescheduleError(previousState, nextState, auth.user!.role, auth.user!.userId, auth.user!.displayName, uniqueSelfName);
     if (error) return Response.json({ error }, { status: 403, headers: noStore });
   }
-  const nextVersion = currentVersion + 1, now = new Date().toISOString(), serialized = JSON.stringify(coreState(body.state));
+  const nextVersion = currentVersion + 1, now = new Date().toISOString(), nonce = crypto.randomUUID();
+  const serialized = JSON.stringify({ ...nextState, meetings: [] });
   // D1 batch is a sequential SQL transaction. Check the same CAS condition
   // for the audit before writing state, avoiding connection-local changes().
   // A stale version makes both statements no-ops; any failure rolls both back.
@@ -73,18 +74,37 @@ export async function PUT(request: Request) {
     ? env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'workspace','1',? WHERE NOT EXISTS (SELECT 1 FROM workspace_states WHERE id=1)").bind(auth.user!.userId,action,now)
     : env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'workspace','1',? WHERE EXISTS (SELECT 1 FROM workspace_states WHERE id=1 AND version=?)").bind(auth.user!.userId,action,now,currentVersion);
   const stateWrite = !current
-    ? env.DB!.prepare("INSERT INTO workspace_states (id,data,version,updated_at,updated_by) SELECT 1,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM workspace_states WHERE id=1)").bind(serialized,nextVersion,now,auth.user!.userId)
-    : env.DB!.prepare("UPDATE workspace_states SET data=?,version=?,updated_at=?,updated_by=? WHERE id=1 AND version=?").bind(serialized,nextVersion,now,auth.user!.userId,currentVersion);
-  const [, write] = await env.DB!.batch([audit, stateWrite]);
+    ? env.DB!.prepare("INSERT INTO workspace_states (id,data,version,updated_at,updated_by,write_nonce) SELECT 1,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM workspace_states WHERE id=1)").bind(serialized,nextVersion,now,auth.user!.userId,nonce)
+    : env.DB!.prepare("UPDATE workspace_states SET data=?,version=?,updated_at=?,updated_by=?,write_nonce=? WHERE id=1 AND version=?").bind(serialized,nextVersion,now,auth.user!.userId,nonce,currentVersion);
+  // Each write has its own nonce: a failed CAS cannot reuse a winner's timestamp.
+  const wrote = "EXISTS (SELECT 1 FROM workspace_states WHERE id=1 AND version=? AND write_nonce=?)";
+  const meetingWrites = JSON.stringify(previousState.meetings) === JSON.stringify(nextState.meetings) ? [] : [
+    env.DB!.prepare(`DELETE FROM meetings WHERE ${wrote}`).bind(nextVersion, nonce),
+    env.DB!.prepare(`INSERT INTO meetings (id,activity_id,position,data) SELECT json_extract(value,'$.id'),json_extract(value,'$.activityId'),key,value FROM json_each(?) WHERE ${wrote}`).bind(JSON.stringify(nextState.meetings), nextVersion, nonce),
+  ];
+  const [, write] = await env.DB!.batch([audit, stateWrite, ...meetingWrites]);
   if ((write.meta.changes ?? 0) !== 1) {
-    const latest = await env.DB!.prepare("SELECT data,version FROM workspace_states WHERE id=1").first<{data:string;version:number}>();
-    return Response.json({ state: readState(latest?.data), version: latest?.version ?? 0 }, { status: 409, headers: noStore });
+    const latest = await readWorkspace();
+    return Response.json({ state: workspaceState(latest), version: latest?.version ?? 0 }, { status: 409, headers: noStore });
   }
   return Response.json({ version: nextVersion, updatedAt: now }, { headers: noStore });
 }
 
 function coreState(state: { activities: unknown[]; tasks: unknown[]; meetings: unknown[]; notices: unknown[] }) {
   return { activities: state.activities, tasks: state.tasks, meetings: state.meetings, notices: state.notices };
+}
+
+// One SQLite statement reads the version and meeting rows from one snapshot.
+async function readWorkspace() {
+  return env.DB!.prepare("SELECT data,version,updated_at,(SELECT json_group_array(json(data)) FROM (SELECT data FROM meetings ORDER BY position)) AS meetings_json FROM workspace_states WHERE id=1")
+    .first<{ data: string; version: number; updated_at: string; meetings_json: string }>();
+}
+
+function workspaceState(row: Awaited<ReturnType<typeof readWorkspace>>) {
+  if (!row) return blank;
+  const meetings: unknown = JSON.parse(row.meetings_json);
+  if (!Array.isArray(meetings)) throw new Error("INVALID_MEETING_DATA");
+  return { ...readState(row.data), meetings };
 }
 
 type ActivityRow = Record<string, unknown>;

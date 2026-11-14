@@ -87,6 +87,16 @@ export const participants = sqliteTable("participants", {
   uniqueIndex("participants_google_sub_unique").on(table.googleSub),
 ]);
 
+// Reserved for an explicitly approved participant-to-member link; no automatic matching.
+export const participantMemberLinks = sqliteTable("participant_member_links", {
+  participantId: text("participant_id").notNull().references(() => participants.id),
+  memberId: text("member_id").notNull().references(() => members.userId),
+  linkedAt: text("linked_at").notNull(),
+  linkedBy: text("linked_by").notNull().references(() => members.userId),
+}, (table) => [
+  uniqueIndex("participant_member_links_pair_unique").on(table.participantId, table.memberId),
+]);
+
 export const participantSessions = sqliteTable("participant_sessions", {
   tokenHash: text("token_hash").primaryKey(),
   participantId: text("participant_id").notNull().references(() => participants.id),

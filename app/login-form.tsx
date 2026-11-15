@@ -28,7 +28,7 @@ export default function LoginForm() {
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: data.get("username"), password, displayName: data.get("displayName"), email: data.get("email"), phone: data.get("phone"), organization: data.get("organization"), position: data.get("position") }) });
       const result = await response.json() as { error?: string; message?: string };
       if (!response.ok) throw new Error(result.error || "操作失敗");
-      if (mode === "login") { router.replace("/"); router.refresh(); return; }
+      if (mode === "login") { router.replace("/backoffice"); router.refresh(); return; }
       form.reset();
       setMessage(result.message || (mode === "register" ? "申請已送出，請等待系統管理員核可。" : "申請已送出。"));
     } catch (reason) { setError(reason instanceof Error ? reason.message : "無法連線，請稍後再試"); }

@@ -1,23 +1,41 @@
+import { env } from "cloudflare:workers";
 import { getMember } from "./admin-auth";
-import LoginForm from "./login-form";
-import Workspace from "./workspace";
+import SiteHome, { type SiteAnnouncement } from "./site/site-home";
+import { readPublicSite, type PublicSite } from "./site-public";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
-  const user = await getMember();
-  if (!user) {
-    return (
-      <main className="signin-page">
-        <section className="signin-card">
-          <div className="brand-mark" aria-hidden="true">▦</div>
-          <p className="eyebrow">PUZZLE ALLIANCE OS</p>
-          <h1>拼圖聯盟工作空間</h1>
-          <p className="muted">活動、任務、會議與團隊協作，都在同一個地方。</p>
-          <LoginForm />
-        </section>
-      </main>
-    );
+const EMPTY: PublicSite = { activities: [], announcements: [] };
+
+/** Taipei calendar day as YYYY-MM-DD (en-CA formats ISO-style). */
+function taipeiDay(value: Date) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
+}
+
+async function loadSite(now: Date): Promise<PublicSite> {
+  if (!env.DB) return EMPTY;
+  try {
+    return await readPublicSite(env.DB, now);
+  } catch (error) {
+    // The public page must still render when the data cannot be read.
+    console.error("public site data unavailable", error);
+    return EMPTY;
   }
-  return <Workspace user={{ id: user.userId, email: user.email, name: user.displayName, role: user.role }} />;
+}
+
+export default async function Home() {
+  const now = new Date();
+  const [member, site] = await Promise.all([getMember().catch(() => null), loadSite(now)]);
+  const announcements: SiteAnnouncement[] = site.announcements.map((item) => {
+    const updated = new Date(item.updatedAt);
+    return { id: item.id, title: item.title, body: item.body, day: Number.isNaN(updated.getTime()) ? "" : taipeiDay(updated) };
+  });
+  return (
+    <SiteHome
+      activities={site.activities}
+      announcements={announcements}
+      today={taipeiDay(now)}
+      signedIn={Boolean(member)}
+    />
+  );
 }

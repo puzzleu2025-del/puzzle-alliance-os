@@ -231,7 +231,8 @@ export function CalendarPanel({ data, userId, userName, userRole, memberOptions 
   ).map((activity) => activity.id));
   const scopedActivities = data.activities.filter((activity) => authorizedActivityIds.has(activity.id));
   const scopedTasks = data.tasks.filter((task) => authorizedActivityIds.has(task.activityId));
-  const scopedMeetings = data.meetings.filter((meeting) => authorizedActivityIds.has(meeting.activityId));
+  const isInvitedToOrganization = (meeting: Meeting) => meeting.meetingScope === "organization" && !!userId && meeting.invitedMemberIds?.includes(userId) === true;
+  const scopedMeetings = data.meetings.filter((meeting) => meeting.meetingScope === "organization" ? canManageAll || isInvitedToOrganization(meeting) : authorizedActivityIds.has(meeting.activityId));
   const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userName, userRole));
   const configurableData = { ...data, activities: configurableActivities };
   const calendarPeople = useMemo(() => Array.from(new Set([
@@ -243,7 +244,15 @@ export function CalendarPanel({ data, userId, userName, userRole, memberOptions 
   const showAll = canSeeAllTasks && taskView === "all";
   const visibleActivities = data.activities.filter((activity) => ((canManageAll && showHistory) || !activityEnded(activity)) && (taskView === "self" || canManageAll || authorizedActivityIds.has(activity.id)) && (showAll || [activity.owner, activity.proxy].some((name) => name?.trim() === selectedPerson)));
   const visibleTasks = data.tasks.filter((task) => ((canManageAll && showHistory) || !taskEnded(task, data.activities)) && (taskView === "self" || canManageAll || authorizedActivityIds.has(task.activityId)) && (showAll || [task.assignee, task.proxy, ...(task.collaborators ?? [])].some((name) => name?.trim() === selectedPerson)));
-  const visibleMeetings = data.meetings.filter((meeting) => ((canManageAll && showHistory) || !meetingEnded(meeting)) && (taskView === "self" || canManageAll || authorizedActivityIds.has(meeting.activityId)) && (showAll || [meeting.organizer, meeting.recorder, ...(meeting.attendees ?? []), ...(meeting.attendeeResponses ?? []).map((person) => person.name)].some((name) => name?.trim() === selectedPerson)));
+  const visibleMeetings = data.meetings.filter((meeting) => {
+    if (!((canManageAll && showHistory) || !meetingEnded(meeting))) return false;
+    const selected = [meeting.organizer, meeting.recorder, ...(meeting.attendees ?? []), ...(meeting.attendeeResponses ?? []).map((person) => person.name)].some((name) => name?.trim() === selectedPerson);
+    if (meeting.meetingScope === "organization") {
+      const invited = isInvitedToOrganization(meeting);
+      return (canManageAll || invited) && (showAll || selected || (taskView === "self" && invited));
+    }
+    return (taskView === "self" || canManageAll || authorizedActivityIds.has(meeting.activityId)) && (showAll || selected);
+  });
   const canMoveEntry = (entry: CalendarEntry) => {
     if (!onReschedule) return false;
     if (canManageAll) return true;
@@ -256,7 +265,7 @@ export function CalendarPanel({ data, userId, userName, userRole, memberOptions 
       return Boolean(task && canConfigureActivity(data.activities.find((activity) => activity.id === task.activityId), userId, userName, userRole));
     }
     const meeting = data.meetings.find((row) => row.id === entry.id);
-    return Boolean(meeting && canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userName, userRole));
+    return Boolean(meeting && (meeting.meetingScope === "organization" ? userRole === "coordinator" && isInvitedToOrganization(meeting) : canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userName, userRole)));
   };
 
   const cells = useMemo(() => {

@@ -1,25 +1,31 @@
 import { env } from "cloudflare:workers";
-import { csrfError, getMember } from "@/app/admin-auth";
+import { csrfError, currentToken, getMember, tokenHash } from "@/app/admin-auth";
 import { taskDeadlineError } from "@/app/task-deadlines";
 
 export const dynamic = "force-dynamic";
 const blank = { activities: [], tasks: [], meetings: [], notices: [] };
 const noStore = { "Cache-Control": "private, no-store" };
+// SQLite's floating-point julianday conversion can truncate up to one millisecond.
+const databaseNowMs = "(CAST(strftime('%s','now') AS INTEGER)*1000 + CAST(substr(strftime('%f','now'),4,3) AS INTEGER))";
 const allowedActions = new Set(["create_activity", "create_task", "create_meeting", "edit_activity", "edit_phase", "submit_activity", "assign_activity_authority", "edit_task", "edit_meeting", "complete_task", "reschedule", "confirm_meeting", "update_meeting_attendance", "read_notice", "update_workspace"]);
 
 async function authorize() {
   if (!env.DB) return { error: Response.json({ error: "資料庫尚未連線" }, { status: 503 }) };
   const user = await getMember();
   if (!user) return { error: Response.json({ error: "請先登入已核可帳號" }, { status: 401 }) };
-  return { user };
+  const token = await currentToken();
+  if (!/^[a-f0-9]{64}$/.test(token)) return { error: Response.json({ error: "請先登入已核可帳號" }, { status: 401 }) };
+  return { user, tokenHash: await tokenHash(token) };
 }
 
 export async function GET() {
   const auth = await authorize(); if (auth.error) return auth.error;
-  const row = await readWorkspace();
+  const row = await readWorkspace(auth.tokenHash!, auth.user!.userId);
+  if (!row?.actor_role) return Response.json({ error: "登入已失效，請重新登入" }, { status: 401, headers: noStore });
+  const currentUser = { ...auth.user!, role: row.actor_role };
   const audit = await env.DB!.prepare("SELECT a.id, COALESCE(m.display_name,a.actor_id) AS actor, a.action, a.created_at AS createdAt FROM audit_logs a LEFT JOIN members m ON m.user_id=a.actor_id ORDER BY a.id DESC LIMIT 50").all();
   const people = await env.DB!.prepare("SELECT user_id AS id,display_name AS name,username,role FROM members WHERE status='active' ORDER BY display_name,username").all();
-  return Response.json({ state: workspaceState(row), version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: auth.user!.role, audit: audit.results, memberOptions: people.results }, { headers: noStore });
+  return Response.json({ state: visibleState(workspaceState(row), currentUser), version: row?.version ?? 0, updatedAt: row?.updated_at ?? null, role: currentUser.role, audit: audit.results, memberOptions: people.results }, { headers: noStore });
 }
 
 export async function PUT(request: Request) {
@@ -31,11 +37,40 @@ export async function PUT(request: Request) {
   if (!validState(body.state) || !Number.isInteger(body.version) || JSON.stringify(body.state).length > 750_000) return Response.json({ error: "資料格式不完整" }, { status: 400 });
   const action = body.action ?? "update_workspace";
   if (!allowedActions.has(action)) return Response.json({ error: "操作類型無效" }, { status: 400 });
-  const current = await readWorkspace();
-  const currentVersion = current?.version ?? 0;
+  const current = await readWorkspace(auth.tokenHash!, auth.user!.userId);
+  if (!current?.actor_role) return Response.json({ error: "登入已失效，請重新登入" }, { status: 401, headers: noStore });
+  auth.user!.role = current.actor_role;
+  const currentVersion = current.version ?? 0;
+  const exists = current.data !== null;
   const previousState = workspaceState(current);
-  if (body.version !== currentVersion) return Response.json({ state: previousState, version: currentVersion }, { status: 409, headers: noStore });
-  const nextState = coreState(body.state);
+  if (body.version !== currentVersion) return Response.json({ state: visibleState(previousState, auth.user!), version: currentVersion }, { status: 409, headers: noStore });
+  const nextState = mergeVisibleState(previousState, coreState(body.state), auth.user!);
+  if (!nextState) return Response.json({ error: "會議資料已變更或無權修改，請重新載入" }, { status: 403, headers: noStore });
+  const oldMeetings = previousState.meetings as MeetingRecord[];
+  const newMeetings = nextState.meetings as MeetingRecord[];
+  for (let i = 0; i < newMeetings.length; i++) {
+    const meeting = newMeetings[i], old = oldMeetings[i];
+    if (old && (organizationMeeting(old) !== organizationMeeting(meeting) || (old.meetingScope === "organization" && meeting.meetingScope !== "organization"))) return Response.json({ error: "既有會議不能變更組織類型" }, { status: 403, headers: noStore });
+    if (!old && meeting.activityId === "" && meeting.meetingScope !== "organization") return Response.json({ error: "請選擇活動或組織會議" }, { status: 400, headers: noStore });
+    if (!organizationMeeting(meeting)) continue;
+    // Preserve untouched rows hidden from this user even if historical data is malformed.
+    if (old && JSON.stringify(old) === JSON.stringify(meeting)) continue;
+    if (meeting.activityId !== "" || !validInvitedIds(meeting.invitedMemberIds)) return Response.json({ error: "組織會議受邀名單無效" }, { status: 400, headers: noStore });
+    if (!old) {
+      if (!["admin", "manager", "coordinator"].includes(auth.user!.role)) return Response.json({ error: "只有總召以上可以建立組織會議" }, { status: 403, headers: noStore });
+      meeting.invitedMemberIds = [...new Set([...meeting.invitedMemberIds, auth.user!.userId])];
+    }
+    const oldIds = old && Array.isArray(old.invitedMemberIds) ? old.invitedMemberIds : [];
+    const added = (meeting.invitedMemberIds as string[]).filter(id => !oldIds.includes(id));
+    if (added.length) {
+      const active = await env.DB!.prepare(`SELECT user_id AS id FROM members WHERE status='active' AND user_id IN (${added.map(() => "?").join(",")})`).bind(...added).all<{id:string}>();
+      if (active.results.length !== added.length) return Response.json({ error: "受邀者須為啟用中的成員" }, { status: 400, headers: noStore });
+    }
+  }
+  if (action === "reschedule" && oldMeetings.some((row, i) => organizationMeeting(row) && JSON.stringify(row) !== JSON.stringify(newMeetings[i]))) {
+    const notice = nextState.notices[0] as Record<string, unknown> | undefined;
+    if (notice) { notice.title = "排程異動"; notice.detail = "有一項排程已更新。"; }
+  }
   const matchingNames = !managerRole(auth.user!.role)
     ? await env.DB!.prepare("SELECT user_id FROM members WHERE status='active' AND display_name=?").bind(auth.user!.displayName).all<{ user_id: string }>()
     : null;
@@ -67,27 +102,45 @@ export async function PUT(request: Request) {
   }
   const nextVersion = currentVersion + 1, now = new Date().toISOString(), nonce = crypto.randomUUID();
   const serialized = JSON.stringify({ ...nextState, meetings: [] });
-  // D1 batch is a sequential SQL transaction. Check the same CAS condition
-  // for the audit before writing state, avoiding connection-local changes().
-  // A stale version makes both statements no-ops; any failure rolls both back.
-  const audit = !current
-    ? env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'workspace','1',? WHERE NOT EXISTS (SELECT 1 FROM workspace_states WHERE id=1)").bind(auth.user!.userId,action,now)
-    : env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'workspace','1',? WHERE EXISTS (SELECT 1 FROM workspace_states WHERE id=1 AND version=?)").bind(auth.user!.userId,action,now,currentVersion);
-  const stateWrite = !current
-    ? env.DB!.prepare("INSERT INTO workspace_states (id,data,version,updated_at,updated_by,write_nonce) SELECT 1,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM workspace_states WHERE id=1)").bind(serialized,nextVersion,now,auth.user!.userId,nonce)
-    : env.DB!.prepare("UPDATE workspace_states SET data=?,version=?,updated_at=?,updated_by=?,write_nonce=? WHERE id=1 AND version=?").bind(serialized,nextVersion,now,auth.user!.userId,nonce,currentVersion);
+  // D1 batch is a sequential SQL transaction. Check session expiry at the
+  // database statement and tie audit/meeting writes to the winning state nonce.
+  const actorGuard = `EXISTS (SELECT 1 FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>${databaseNowMs} AND m.user_id=? AND m.status='active' AND m.role=?)`;
+  const guardArgs = [auth.tokenHash!, auth.user!.userId, auth.user!.role] as const;
+  const stateWrite = !exists
+    ? env.DB!.prepare(`INSERT INTO workspace_states (id,data,version,updated_at,updated_by,write_nonce) SELECT 1,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM workspace_states WHERE id=1) AND ${actorGuard}`).bind(serialized,nextVersion,now,auth.user!.userId,nonce,...guardArgs)
+    : env.DB!.prepare(`UPDATE workspace_states SET data=?,version=?,updated_at=?,updated_by=?,write_nonce=? WHERE id=1 AND version=? AND ${actorGuard}`).bind(serialized,nextVersion,now,auth.user!.userId,nonce,currentVersion,...guardArgs);
   // Each write has its own nonce: a failed CAS cannot reuse a winner's timestamp.
   const wrote = "EXISTS (SELECT 1 FROM workspace_states WHERE id=1 AND version=? AND write_nonce=?)";
-  const meetingWrites = JSON.stringify(previousState.meetings) === JSON.stringify(nextState.meetings) ? [] : [
-    env.DB!.prepare(`DELETE FROM meetings WHERE ${wrote}`).bind(nextVersion, nonce),
-    env.DB!.prepare(`INSERT INTO meetings (id,activity_id,position,data) SELECT json_extract(value,'$.id'),json_extract(value,'$.activityId'),key,value FROM json_each(?) WHERE ${wrote}`).bind(JSON.stringify(nextState.meetings), nextVersion, nonce),
-  ];
-  const [, write] = await env.DB!.batch([audit, stateWrite, ...meetingWrites]);
-  if ((write.meta.changes ?? 0) !== 1) {
-    const latest = await readWorkspace();
-    return Response.json({ state: workspaceState(latest), version: latest?.version ?? 0 }, { status: 409, headers: noStore });
+  const audit = env.DB!.prepare(`INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'workspace','1',? WHERE ${wrote}`).bind(auth.user!.userId,action,now,nextVersion,nonce);
+  // Update only changed/new rows: invisible historical records retain their exact stored bytes.
+  const changedMeetings = newMeetings.flatMap((meeting, i) => {
+    const old = oldMeetings[i];
+    if (old && JSON.stringify(old) === JSON.stringify(meeting)) return [];
+    return [{ id: meeting.id, activityId: organizationMeeting(meeting) ? null : meeting.activityId, position: i, data: meeting }];
+  });
+  const meetingWrites = changedMeetings.length ? [
+    env.DB!.prepare(`INSERT INTO meetings (id,activity_id,position,data) SELECT json_extract(value,'$.id'),json_extract(value,'$.activityId'),json_extract(value,'$.position'),json_extract(value,'$.data') FROM json_each(?) WHERE ${wrote} ON CONFLICT(id) DO UPDATE SET activity_id=excluded.activity_id,position=excluded.position,data=excluded.data`).bind(JSON.stringify(changedMeetings), nextVersion, nonce),
+  ] : [];
+  const [write] = await env.DB!.batch([stateWrite, audit, ...meetingWrites]);
+  const receipt = () => Response.json({ saved: true, requiresReauthentication: true, version: nextVersion, updatedAt: now }, { headers: noStore });
+  let latest: Awaited<ReturnType<typeof readWorkspace>>;
+  try { latest = await readWorkspace(auth.tokenHash!, auth.user!.userId); }
+  catch (error) {
+    // A successful transaction remains committed even if the subsequent read fails.
+    if ((write.meta.changes ?? 0) === 1) return receipt();
+    throw error;
   }
-  return Response.json({ version: nextVersion, updatedAt: now }, { headers: noStore });
+  if (!latest?.actor_role) {
+    // Return a receipt without workspace data so the client clears its private cache.
+    if ((write.meta.changes ?? 0) === 1) return receipt();
+    return Response.json({ error: "登入已失效，請重新登入" }, { status: 401, headers: noStore });
+  }
+  const latestUser = { ...auth.user!, role: latest.actor_role };
+  if ((write.meta.changes ?? 0) !== 1) {
+    if (latest.actor_role !== auth.user!.role) return Response.json({ error: "權限已變更，請重新載入" }, { status: 403, headers: noStore });
+    return Response.json({ state: visibleState(workspaceState(latest), latestUser), version: latest.version ?? 0 }, { status: 409, headers: noStore });
+  }
+  return Response.json({ state: visibleState(workspaceState(latest), latestUser), version: latest.version ?? nextVersion, updatedAt: latest.updated_at ?? now }, { headers: noStore });
 }
 
 function coreState(state: { activities: unknown[]; tasks: unknown[]; meetings: unknown[]; notices: unknown[] }) {
@@ -95,16 +148,68 @@ function coreState(state: { activities: unknown[]; tasks: unknown[]; meetings: u
 }
 
 // One SQLite statement reads the version and meeting rows from one snapshot.
-async function readWorkspace() {
-  return env.DB!.prepare("SELECT data,version,updated_at,(SELECT json_group_array(json(data)) FROM (SELECT data FROM meetings ORDER BY position)) AS meetings_json FROM workspace_states WHERE id=1")
-    .first<{ data: string; version: number; updated_at: string; meetings_json: string }>();
+async function readWorkspace(sessionHash: string, userId: string) {
+  // Actor session/role and workspace are evaluated in the same SQLite snapshot.
+  return env.DB!.prepare(`SELECT data,version,updated_at,meetings_json,actor_role FROM (SELECT (SELECT data FROM workspace_states WHERE id=1) AS data,(SELECT version FROM workspace_states WHERE id=1) AS version,(SELECT updated_at FROM workspace_states WHERE id=1) AS updated_at,(SELECT json_group_array(json_object('activityId',activity_id,'data',json(data))) FROM (SELECT activity_id,data FROM meetings ORDER BY position)) AS meetings_json,(SELECT m.role FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>${databaseNowMs} AND m.user_id=? AND m.status='active') AS actor_role)`)
+    .bind(sessionHash, userId)
+    .first<{ data: string | null; version: number | null; updated_at: string | null; meetings_json: string; actor_role: string | null }>();
 }
 
 function workspaceState(row: Awaited<ReturnType<typeof readWorkspace>>) {
-  if (!row) return blank;
-  const meetings: unknown = JSON.parse(row.meetings_json);
-  if (!Array.isArray(meetings)) throw new Error("INVALID_MEETING_DATA");
+  if (!row || row.data === null) return blank;
+  const rows: unknown = JSON.parse(row.meetings_json);
+  if (!Array.isArray(rows)) throw new Error("INVALID_MEETING_DATA");
+  const meetings = rows.map((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("INVALID_MEETING_DATA");
+    const record = entry as { activityId: unknown; data: unknown };
+    if (!record.data || typeof record.data !== "object" || Array.isArray(record.data)) throw new Error("INVALID_MEETING_DATA");
+    const meeting = record.data as MeetingRecord;
+    Object.defineProperty(meeting, physicalActivityId, { value: record.activityId });
+    return meeting;
+  });
   return { ...readState(row.data), meetings };
+}
+
+type WorkspaceUser = NonNullable<Awaited<ReturnType<typeof getMember>>>;
+const physicalActivityId = Symbol("physicalActivityId");
+type MeetingRecord = Record<string, unknown> & { id: string; [physicalActivityId]?: unknown };
+const hasPhysicalActivityId = (meeting: MeetingRecord) => Object.prototype.hasOwnProperty.call(meeting, physicalActivityId);
+// A mismatch or private-only metadata without its expected scope is ambiguous:
+// fail closed rather than treating a damaged private record as an activity meeting.
+const organizationMeeting = (meeting: MeetingRecord) => meeting.meetingScope !== undefined ||
+  meeting.invitedMemberIds !== undefined || meeting.activityId === "" ||
+  (hasPhysicalActivityId(meeting) && (meeting[physicalActivityId] === null || meeting[physicalActivityId] !== meeting.activityId));
+function validInvitedIds(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(id => typeof id === "string" && id.trim().length > 0 && id === id.trim()) && new Set(value).size === value.length;
+}
+function wellFormedOrganization(meeting: MeetingRecord) {
+  return meeting.meetingScope === "organization" && meeting.activityId === "" &&
+    (!hasPhysicalActivityId(meeting) || meeting[physicalActivityId] === null) && validInvitedIds(meeting.invitedMemberIds);
+}
+function maySeeMeeting(meeting: MeetingRecord, user: WorkspaceUser) {
+  return !organizationMeeting(meeting) || managerRole(user.role) ||
+    (wellFormedOrganization(meeting) && (meeting.invitedMemberIds as string[]).includes(user.userId));
+}
+// Managers can repair malformed private rows using the normal edit interface. The original
+// bytes remain unchanged if this safe presentation is submitted without an actual edit.
+function publicMeeting(meeting: MeetingRecord) {
+  if (!organizationMeeting(meeting) || wellFormedOrganization(meeting)) return meeting;
+  return { ...meeting, meetingScope: "organization", activityId: "", invitedMemberIds: validInvitedIds(meeting.invitedMemberIds) ? meeting.invitedMemberIds : [] };
+}
+function visibleState(state: ReturnType<typeof coreState>, user: WorkspaceUser) {
+  return { ...state, meetings: (state.meetings as MeetingRecord[]).filter((meeting) => maySeeMeeting(meeting, user)).map(publicMeeting) };
+}
+function mergeVisibleState(previous: ReturnType<typeof coreState>, proposed: ReturnType<typeof coreState>, user: WorkspaceUser) {
+  const full = previous.meetings as MeetingRecord[], incoming = proposed.meetings as MeetingRecord[];
+  const visible = full.filter((meeting) => maySeeMeeting(meeting, user));
+  if (incoming.length < visible.length || visible.some((meeting, i) => meeting.id !== incoming[i]?.id)) return null;
+  const known = new Set(full.map((meeting) => meeting.id));
+  if (new Set(incoming.map((meeting) => meeting.id)).size !== incoming.length || incoming.slice(visible.length).some((meeting) => known.has(meeting.id))) return null;
+  const updated = new Map(incoming.slice(0, visible.length).map((meeting, i) => {
+    const old = visible[i];
+    return [meeting.id, JSON.stringify(publicMeeting(old)) === JSON.stringify(meeting) ? old : meeting];
+  }));
+  return { ...proposed, meetings: [...full.map((meeting) => updated.get(meeting.id) ?? meeting), ...incoming.slice(visible.length)] };
 }
 
 type ActivityRow = Record<string, unknown>;
@@ -183,7 +288,7 @@ function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnTyp
   const activityById = new Map((before.activities as Record<string, unknown>[]).map((row) => [row.id, row]));
   const ownsActivity = (row?: Record<string, unknown>) => assignedActivity(row, role, userId, name, uniqueSelfName);
   const ownsRelatedActivity = (row: Record<string, unknown>) => ownsActivity(activityById.get(row.activityId));
-  const managesMeeting = (row: Record<string, unknown>) => ownsRelatedActivity(row);
+  const managesMeeting = (row: Record<string, unknown>) => row.meetingScope === "organization" ? role === "coordinator" && validInvitedIds(row.invitedMemberIds) && row.invitedMemberIds.includes(userId) : ownsRelatedActivity(row);
   const changedFields = (oldRow: Record<string, unknown>, newRow: Record<string, unknown>) =>
     Object.keys({ ...oldRow, ...newRow }).filter((field) => !same(oldRow[field], newRow[field]));
 
@@ -200,7 +305,7 @@ function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnTyp
     if (key === "activities" && added.some((row) => row.coordinatorIds !== undefined || row.traineeCoordinatorId !== undefined)) return "新活動的職權請在成員管理設定";
     if (added.length && !isManager) {
       if (key === "activities") return "新活動及其總召授權須由管理員建立";
-      if (added.some((row) => !ownsRelatedActivity(row) || submitted(activityById.get(row.activityId)))) return "只能在獲授權且尚未提交設定的活動新增資料";
+      if (added.some((row) => !(key === "meetings" && row.meetingScope === "organization" && role === "coordinator") && (!ownsRelatedActivity(row) || submitted(activityById.get(row.activityId))))) return "只能在獲授權且尚未提交設定的活動新增資料";
     }
     for (const row of oldRows) {
       const updated = newById.get(row.id)!;
@@ -280,7 +385,7 @@ function rescheduleError(before: ReturnType<typeof coreState>, after: ReturnType
       const activity = key === "activities" ? oldRow : activityById.get(oldRow.activityId);
       if (!canManageAll) {
         if (submitted(activity)) return "活動設定已提交，改期須由管理員處理";
-        const assigned = assignedActivity(activity, role, userId, name, uniqueSelfName);
+        const assigned = key === "meetings" && oldRow.meetingScope === "organization" ? role === "coordinator" && validInvitedIds(oldRow.invitedMemberIds) && oldRow.invitedMemberIds.includes(userId) : assignedActivity(activity, role, userId, name, uniqueSelfName);
         if (!assigned && (key !== "tasks" || !uniqueSelfName || String(oldRow[owner] ?? "").trim() !== name.trim())) return "只能調整自己的任務或獲授權活動的日期";
       }
       const unchanged = Object.keys({ ...oldRow, ...newRow }).filter((field) => !allowed.includes(field)).every((field) => same(oldRow[field], newRow[field]));
@@ -326,7 +431,8 @@ function validState(value: unknown): value is {activities:unknown[];tasks:unknow
       && (x.effortHours === undefined || (typeof x.effortHours === "number" && Number.isFinite(x.effortHours) && x.effortHours >= 0))
       && (x.progressPercent === undefined || (typeof x.progressPercent === "number" && Number.isFinite(x.progressPercent) && x.progressPercent >= 0 && x.progressPercent <= 100)))
     && row.meetings.every(x => strings(x,["id","title","activityId","time","status"])
-      && optionalStrings(x,["type","organizer","recorder","endTime","location","meetingLink","agenda"])
+      && optionalStrings(x,["type","organizer","recorder","endTime","location","meetingLink","agenda","meetingScope"])
+      && stringList(x,"invitedMemberIds")
       && stringList(x,"attendees")
       && (x.attending === undefined || typeof x.attending === "number")
       && (x.total === undefined || typeof x.total === "number")

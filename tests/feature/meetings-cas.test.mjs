@@ -5,7 +5,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { registerHooks } from 'node:module';
 
 const migrations = readdirSync('drizzle').filter(name => /^[0-9]{4}_.+\.sql$/.test(name)).sort();
-const legacyFiles = migrations.filter(name => !name.startsWith('0012_'));
+const legacyFiles = migrations.filter(name => name < '0012_');
+const laterFiles = migrations.filter(name => name > '0012_meetings_table.sql');
 const migration = readFileSync('drizzle/0012_meetings_table.sql', 'utf8');
 const workspace = (meetings = [], notices = []) => ({ activities: [], tasks: [], meetings, notices });
 const meeting = (id, title) => ({ id, title, activityId: 'activity', time: '2026-11-13T10:00', status: 'planned' });
@@ -41,8 +42,8 @@ test('migration preserves every meeting and refuses malformed or duplicate input
 });
 
 globalThis.__meetingsEnv = {};
-globalThis.__meetingsUser = { role: 'admin', userId: 'admin', displayName: 'Admin' };
-const mockAuth = `export const getMember=async()=>globalThis.__meetingsUser; export const csrfError=r=>r.headers.get('origin')===new URL(r.url).origin?null:new Response(null,{status:403});`;
+globalThis.__meetingsUser = { role: 'admin', userId: 'admin-kao19950411', displayName: '嘉駿' };
+const mockAuth = `export const getMember=async()=>globalThis.__meetingsUser; export const currentToken=async()=>"a".repeat(64); export const tokenHash=async()=>"test-hash"; export const csrfError=r=>r.headers.get('origin')===new URL(r.url).origin?null:new Response(null,{status:403});`;
 const mockDeadline = 'export const taskDeadlineError=()=>"";';
 registerHooks({ resolve(specifier, context, nextResolve) {
   if (specifier === 'cloudflare:workers') return { url: 'data:text/javascript,export const env=globalThis.__meetingsEnv', shortCircuit: true };
@@ -79,9 +80,14 @@ function adapter(sqlite) {
     },
   };
 }
+function seedCurrentDatabase(sqlite) {
+  for (const name of laterFiles) sqlite.exec(readFileSync('drizzle/' + name, 'utf8'));
+  sqlite.prepare('INSERT INTO admin_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run('test-hash','admin-kao19950411',4102444800000);
+}
 function fixture(existing = true) {
   const sqlite = legacyDatabase(existing ? JSON.stringify(workspace(initial)) : undefined);
   sqlite.exec(migration);
+  seedCurrentDatabase(sqlite);
   const db = adapter(sqlite);
   globalThis.__meetingsEnv.DB = db;
   return { sqlite, db };
@@ -152,6 +158,7 @@ test('rollback draft restores latest ordered meetings and preserves other fields
     const state = workspace(rows, [notice('Keep')]);
     const sqlite = legacyDatabase(JSON.stringify(state));
     sqlite.exec(migration);
+    seedCurrentDatabase(sqlite);
     globalThis.__meetingsEnv.DB = adapter(sqlite);
     try {
       assert.equal((await put(state, 5)).status, 200);

@@ -65,6 +65,12 @@ export default function Workspace({ user, preview = false, initialState = emptyS
     return () => window.removeEventListener("storage", onStorage);
   }, [preview]);
 
+  const lockPrivateData = useCallback((message: string, status: string) => {
+    // Private meeting data must not stay on screen after an auth failure or a lost connection.
+    setData(emptyState); setAudit([]); setMemberOptions([]); setReady(false);
+    setError(message); setSync(status);
+  }, []);
+
   const load = useCallback(async () => {
     if (preview || saving.current) return;
     const requestGeneration = ++generation.current;
@@ -75,8 +81,11 @@ export default function Workspace({ user, preview = false, initialState = emptyS
       if (requestGeneration !== generation.current) return;
       setData(body.state ?? emptyState); setVersion(body.version ?? 0); setAudit(body.audit ?? []); setMemberOptions(body.memberOptions ?? []); setSync("已同步");
       setError(""); setReady(true);
-    } catch (e) { if (requestGeneration !== generation.current) return; setError(e instanceof Error ? e.message : "載入失敗"); setSync("同步失敗"); }
-  }, [preview]);
+    } catch (e) {
+      if (requestGeneration !== generation.current) return;
+      lockPrivateData(e instanceof Error ? e.message : "載入失敗", "同步失敗");
+    }
+  }, [lockPrivateData, preview]);
 
   useEffect(() => {
     if (preview) return;
@@ -89,6 +98,16 @@ export default function Workspace({ user, preview = false, initialState = emptyS
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(); }, 45000);
     return () => { window.removeEventListener("focus", onFocus); window.clearInterval(timer); };
   }, [load]);
+  useEffect(() => {
+    if (preview || typeof EventSource === "undefined") return;
+    const source = new EventSource("/api/workspace/events");
+    // Every (re)connection reloads, so a write made while the stream was down is not missed.
+    source.addEventListener("open", () => void load());
+    source.addEventListener("changed", () => void load());
+    source.addEventListener("revoked", () => { source.close(); lockPrivateData("登入已失效，請重新登入", "登入已失效"); });
+    source.addEventListener("error", () => lockPrivateData("即時同步中斷，已清除畫面資料；連線恢復後會重新載入", "同步中斷"));
+    return () => source.close();
+  }, [load, lockPrivateData, preview]);
 
   const save = useCallback(async (next: State, action: string) => {
     if (saving.current || !ready) return false;
@@ -101,10 +120,14 @@ export default function Workspace({ user, preview = false, initialState = emptyS
     saving.current = true; generation.current++; setBusy(true); setSync("儲存中"); setError("");
     try {
       const res = await fetch("/api/workspace", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ state: next, version, action }) });
-      const body = await res.json() as {state:State;version:number;error?:string};
-      if (res.status === 409) { setData(body.state); setVersion(body.version); throw new Error("資料已由其他裝置更新，已載入最新版本，請再操作一次"); }
+      const body = await res.json() as {state?:State;version:number;error?:string;requiresReauthentication?:boolean};
+      if (res.status === 409 && body.state) { setData(body.state); setVersion(body.version); throw new Error("資料已由其他裝置更新，已載入最新版本，請再操作一次"); }
       if (!res.ok) throw new Error(body.error || "儲存失敗");
-      setData(next); setVersion(body.version); record(); setSync("已同步"); return true;
+      if (body.requiresReauthentication) {
+        setData(emptyState); setAudit([]); setMemberOptions([]); setVersion(body.version); setReady(false);
+        setError("資料已儲存；為保護資料，請重新登入確認同步狀態。"); setSync("登入已失效"); return true;
+      }
+      setData(body.state ?? next); setVersion(body.version); record(); setSync("已同步"); return true;
     } catch (e) { setError(e instanceof Error ? e.message : "儲存失敗"); setSync("同步失敗"); return false; }
     finally { saving.current = false; setBusy(false); }
   }, [preview, ready, version, user.name]);

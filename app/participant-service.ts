@@ -11,7 +11,7 @@ import { participantOauthCallback } from "./participant-oauth-callback.ts";
 // @ts-expect-error TS5097: native TypeScript tests require the extension.
 import { createGoogleKeyStore } from "./google-keys.ts";
 
-type Operation = "registration" | "mine" | "prefill" | "qr-issue" | "qr-revoke" | "consent" | "withdraw" | "auth-start" | "auth-callback";
+type Operation = "registration" | "mine" | "prefill" | "qr-issue" | "qr-revoke" | "consent" | "withdraw" | "auth-start" | "auth-callback" | "remittance";
 type Settings = {
   DB?: D1Database;
   PARTICIPANT_ENABLED?: string;

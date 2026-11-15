@@ -104,6 +104,22 @@ test('staff backfill rejects malformed values and leaves the record unchanged', 
   } finally { db.close(); }
 });
 
+test('paid anonymous registration must include the last five digits; blank is accepted only when free', async () => {
+  const db = setup();
+  try {
+    const missing = await submit({ answers: {}, consent: true, idempotencyKey: 'k-blank', feeRevision: 1 });
+    assert.equal(missing.status, 400);
+    assert.equal((await missing.json()).error, '收費活動須填寫匯款末五碼（5 位數字）');
+    const blank = await submit({ answers: {}, consent: true, idempotencyKey: 'k-empty', feeRevision: 1, remittanceLast5: '   ' });
+    assert.equal(blank.status, 400);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM registration_submissions WHERE idempotency_hash IN ('k-blank','k-empty')").get().n, 0);
+    db.exec("UPDATE activity_fees SET amount=0,revision=2 WHERE activity_id='a'");
+    const free = await submit({ answers: {}, consent: true, idempotencyKey: 'k-free', feeRevision: 2 });
+    assert.equal(free.status, 201);
+    assert.equal(remittanceOf(db, (await free.json()).receiptId), '');
+  } finally { db.close(); }
+});
+
 test('members without registration access and trainee coordinators cannot backfill', async () => {
   const db = setup();
   try {

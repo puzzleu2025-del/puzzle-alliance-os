@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { csrfError, rateLimited, tokenHash } from "@/app/admin-auth";
-import { normalizeRegistrationForm, normalizeRegistrationId, normalizeRemittanceLast5, validateRegistrationSubmission } from "@/app/registration-types";
+import { normalizeRegistrationForm, normalizeRegistrationId, normalizeRemittanceLast5, remittanceMissing, REMITTANCE_REQUIRED_MESSAGE, validateRegistrationSubmission } from "@/app/registration-types";
 
 export const dynamic = "force-dynamic";
 const noStore = { "Cache-Control": "no-store" };
@@ -53,6 +53,8 @@ export async function POST(request: Request, context: { params: Promise<{ slug: 
   if (!Number.isSafeInteger(expectedFeeRevision) || (expectedFeeRevision as number) < 0) return Response.json({ error: "費用版本無效，請重新載入" }, { status: 400, headers: noStore });
   const remittanceLast5 = normalizeRemittanceLast5(body.remittanceLast5);
   if (remittanceLast5 === null) return Response.json({ error: "匯款末五碼須為 5 位數字" }, { status: 400, headers: noStore });
+  const fee = await env.DB!.prepare("SELECT amount FROM activity_fees WHERE activity_id=?").bind(loaded.row.activityId).first<{amount:number}>();
+  if (remittanceMissing(fee?.amount ?? 0, remittanceLast5)) return Response.json({ error: REMITTANCE_REQUIRED_MESSAGE }, { status: 400, headers: noStore });
   const prior = await env.DB!.prepare("SELECT id FROM registration_submissions WHERE form_id=? AND idempotency_hash=?").bind(loaded.row.id,idempotencyHash).first<{id:string}>();
   if (prior) return Response.json({ ok:true, receiptId:prior.id, confirmationMessage:loaded.form.confirmationMessage }, { headers: noStore });
   const id = crypto.randomUUID(), now = new Date().toISOString();

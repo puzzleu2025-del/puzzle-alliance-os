@@ -167,6 +167,12 @@ export function normalizeRemittanceLast5(value: unknown): string | null {
   return trimmed === "" || /^[0-9]{5}$/.test(trimmed) ? trimmed : null;
 }
 
+// Paid activities must carry the last five digits at registration; only staff may change them afterwards.
+export const REMITTANCE_REQUIRED_MESSAGE = "收費活動須填寫匯款末五碼（5 位數字）";
+export function remittanceMissing(feeAmount: number, remittanceLast5: string): boolean {
+  return feeAmount > 0 && remittanceLast5 === "";
+}
+
 export function normalizeRegistrationText(value: unknown, maxLength = MAX_TEXT) {
   return String(value ?? "")
     .replace(/\u0000/g, "")

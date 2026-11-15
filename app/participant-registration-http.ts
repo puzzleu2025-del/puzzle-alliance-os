@@ -9,13 +9,15 @@ import { secretHash } from "./participant-session.ts";
 import { getParticipantProfilePrefill } from "./participant-profile-prefill.ts";
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
 import { listMyRegistrations } from "./participant-my-registrations.ts";
+// @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
+import { fillOwnRemittance } from "./participant-remittance.ts";
 
 type ServerConfig = {
   origin: string;
   /** Set only when the deployment guarantees Cloudflare overwrites this header. */
   trustedCloudflareEdge?: boolean;
 };
-type Operation = "registration" | "qr-issue" | "qr-revoke" | "prefill" | "mine";
+type Operation = "registration" | "qr-issue" | "qr-revoke" | "prefill" | "mine" | "remittance";
 
 const HEADERS = {
   "Cache-Control": "no-store",
@@ -111,6 +113,7 @@ export async function participantRegistrationHttp(
     "qr-revoke": "/api/participant/qr/revoke",
     prefill: "/api/participant/prefill",
     mine: "/api/participant/registrations/mine",
+    remittance: "/api/participant/registrations/remittance",
   };
   if (!Object.hasOwn(paths, operation)) return failure(503);
   if (request.method !== "POST") return failure(405);
@@ -131,6 +134,8 @@ export async function participantRegistrationHttp(
           body.slug.length !== 32 || !/^[a-f0-9]{32}$/.test(body.slug)) return failure(400);
     } else if (operation === "mine") {
       if (!exactObject(body, ["cursor"])) return failure(400);
+    } else if (operation === "remittance") {
+      if (!exactObject(body, ["submissionId", "remittanceLast5"]) || typeof body.submissionId !== "string") return failure(400);
     } else if (operation === "qr-issue") {
       if (!exactObject(body, ["submissionId"]) || typeof body.submissionId !== "string" ||
           body.submissionId.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(body.submissionId) ||
@@ -145,6 +150,12 @@ export async function participantRegistrationHttp(
       const result = await listMyRegistrations(db, kind, cookie, (body as Record<string, unknown>).cursor);
       if (!result.ok) return failure({ invalid: 400, unauthorized: 401, unavailable: 503 }[result.code]);
       return Response.json({ registrations: result.registrations, nextCursor: result.nextCursor }, { headers: HEADERS });
+    }
+    if (operation === "remittance") {
+      const data = body as Record<string, unknown>;
+      const outcome = await fillOwnRemittance(db, kind, cookie, data.submissionId, data.remittanceLast5);
+      if (!outcome.ok) return failure({ invalid: 400, unauthorized: 401, not_found: 404, not_required: 409, already_set: 409, unavailable: 503 }[outcome.code]);
+      return Response.json({ ok: true }, { headers: HEADERS });
     }
     if (operation === "prefill") {
       const result = await getParticipantProfilePrefill(db, kind, cookie, (body as Record<string, unknown>).slug);

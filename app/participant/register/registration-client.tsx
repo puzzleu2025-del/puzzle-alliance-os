@@ -6,7 +6,7 @@ import ParticipantQrView from "@/app/participant-qr-view";
 import type { RegistrationForm, RegistrationSubmission } from "@/app/registration-types";
 
 type Identity = "member" | "participant";
-type Loaded = { form: RegistrationForm; activityName: string; version: number; values: Record<string, string> };
+type Loaded = { form: RegistrationForm; activityName: string; version: number; feeAmount: number; feeRevision: number; values: Record<string, string> };
 
 export default function RegistrationClient({ slug }: { slug: string }) {
   const [identity, setIdentity] = useState<Identity | null>(null);
@@ -35,11 +35,11 @@ function RegistrationFlow({ slug, identity, onBack }: { slug: string; identity: 
           fetch("/api/participant/prefill", { method: "POST", headers: { "Content-Type": "application/json", "X-Participant-Identity": identity }, body: JSON.stringify({ slug }), cache: "no-store", signal: controller.signal }),
         ]);
         if (!formResponse.ok || !prefillResponse.ok) throw new Error("目前無法載入報名資料，請確認已使用所選身分登入並稍後再試。");
-        const publicData = await formResponse.json() as { form?: RegistrationForm; activity?: { name?: string }; formVersion?: number };
+        const publicData = await formResponse.json() as { form?: RegistrationForm; activity?: { name?: string }; formVersion?: number; feeAmount?: number; feeRevision?: number };
         const prefill = await prefillResponse.json() as { formVersion?: number; values?: Record<string, string> };
-        if (!publicData.form || typeof publicData.activity?.name !== "string" || !Number.isSafeInteger(publicData.formVersion) || !prefill.values || typeof prefill.values !== "object" || Array.isArray(prefill.values)) throw new Error("報名資料無法使用，請稍後再試。");
+        if (!publicData.form || typeof publicData.activity?.name !== "string" || !Number.isSafeInteger(publicData.formVersion) || !Number.isSafeInteger(publicData.feeAmount) || !Number.isSafeInteger(publicData.feeRevision) || !prefill.values || typeof prefill.values !== "object" || Array.isArray(prefill.values)) throw new Error("報名資料無法使用，請稍後再試。");
         if (publicData.formVersion !== prefill.formVersion) throw new Error("報名表已更新，請重新整理後再填寫。");
-        if (!controller.signal.aborted) setLoaded({ form: publicData.form, activityName: publicData.activity.name, version: publicData.formVersion!, values: prefill.values });
+        if (!controller.signal.aborted) setLoaded({ form: publicData.form, activityName: publicData.activity.name, version: publicData.formVersion!, feeAmount: publicData.feeAmount!, feeRevision: publicData.feeRevision!, values: prefill.values });
       } catch (reason) {
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "目前無法載入報名資料，請稍後再試。");
       }
@@ -84,12 +84,12 @@ function RegistrationFlow({ slug, identity, onBack }: { slug: string; identity: 
 
   async function submit(submission: RegistrationSubmission): Promise<boolean> {
     if (!loaded || uncertain || done.current || pending.current) return false;
-    const body = JSON.stringify({ slug, answers: submission.answers, consent: submission.consent, idempotencyKey: crypto.randomUUID(), formVersion: loaded.version });
+    const body = JSON.stringify({ slug, answers: submission.answers, consent: submission.consent, idempotencyKey: crypto.randomUUID(), formVersion: loaded.version, feeRevision: loaded.feeRevision });
     retry.current = body;
     return send(body, false);
   }
 
   if (!loaded) return <main className="signin-page"><section className="signin-card">{error ? <><p role="alert">{error}</p>{identity === "participant" && <form method="post" action="/api/participant/auth/start"><input type="hidden" name="slug" value={slug} /><button type="submit">使用 Google 登入</button></form>}<button type="button" onClick={onBack}>返回選擇身分</button></> : <p>正在載入報名資料…</p>}</section></main>;
   if (completed) return <main className="signin-page"><section className="signin-card"><p role="status">報名已送出</p><h1>{loaded.form.title}</h1><p>{loaded.form.confirmationMessage || "我們已收到你的資料，後續資訊將由活動團隊通知。"}</p><ParticipantQrView submissionId={receiptId} identity={identity} /></section></main>;
-  return <>{error && <p role="alert">{error}</p>}{uncertain && <button type="button" disabled={retrying} onClick={() => { if (retry.current) void send(retry.current, true); }}>{retrying ? "確認中…" : "重試原報名內容"}</button>}<fieldset disabled={uncertain} style={{ border: 0, padding: 0, margin: 0 }}><RegistrationPublic form={loaded.form} activityName={loaded.activityName} initialValues={loaded.values} onSubmit={submit} /></fieldset></>;
+  return <>{error && <p role="alert">{error}</p>}{uncertain && <button type="button" disabled={retrying} onClick={() => { if (retry.current) void send(retry.current, true); }}>{retrying ? "確認中…" : "重試原報名內容"}</button>}<fieldset disabled={uncertain} style={{ border: 0, padding: 0, margin: 0 }}><RegistrationPublic form={loaded.form} activityName={loaded.activityName} feeAmount={loaded.feeAmount} initialValues={loaded.values} onSubmit={submit} /></fieldset></>;
 }

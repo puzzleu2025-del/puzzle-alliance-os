@@ -26,6 +26,8 @@ export default function RegistrationPanel({ data, userId, userName, userRole, me
   const [activityId, setActivityId] = useState(initialActivityId ?? accessibleActivities[0]?.id ?? "");
   const [remoteForms, setRemoteForms] = useState<RegistrationForm[]>([]);
   const [remoteSubmissions, setRemoteSubmissions] = useState<RegistrationSubmission[]>([]);
+  const [feeRevision, setFeeRevision] = useState(0);
+  const [feeAmount, setFeeAmount] = useState(0);
   const [loading, setLoading] = useState(!preview && Boolean(initialActivityId ?? data.activities[0]?.id));
   const forms = preview ? (data.registrationForms ?? []) : remoteForms;
   const submissions = preview ? (data.registrationSubmissions ?? []) : remoteSubmissions;
@@ -51,9 +53,9 @@ export default function RegistrationPanel({ data, userId, userName, userRole, me
     if (preview || !activityId) return;
     let alive = true;
     fetch(`/api/registration-forms?activityId=${encodeURIComponent(activityId)}`, { cache:"no-store" }).then(async (response) => {
-      const body = await response.json() as {forms?:RegistrationForm[];submissions?:NonNullable<State["registrationSubmissions"]>;error?:string};
+      const body = await response.json() as {forms?:RegistrationForm[];submissions?:NonNullable<State["registrationSubmissions"]>;feeAmount?:number;feeRevision?:number;error?:string};
       if (!response.ok) throw new Error(body.error || "無法載入報名表");
-      if (alive) { setRemoteForms(body.forms ?? []); setRemoteSubmissions(body.submissions ?? []); setSelectedId(""); setFeedback(""); }
+      if (alive) { setRemoteForms(body.forms ?? []); setRemoteSubmissions(body.submissions ?? []); setFeeAmount(body.feeAmount ?? 0); setFeeRevision(body.feeRevision ?? 0); setSelectedId(""); setFeedback(""); }
     }).catch((reason) => { if (alive) setFeedback(reason instanceof Error ? reason.message : "無法載入報名表"); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activityId, preview]);
@@ -137,7 +139,7 @@ export default function RegistrationPanel({ data, userId, userName, userRole, me
     setFeedback(`已匯出 ${selectedSubmissions.length} 筆報名資料。`);
   };
 
-  const updateReconciliation = async (submission: RegistrationSubmission, patch: {paymentStatus?:RegistrationPaymentStatus;paymentNote?:string}) => {
+  const updateReconciliation = async (submission: RegistrationSubmission, patch: {paymentStatus?:RegistrationPaymentStatus;paymentNote?:string}, resolveRecheck = false) => {
     if (!selected || reconciliationBusy) return;
     const nextSubmission = { ...submission, ...patch };
     setReconciliationBusy(submission.id);
@@ -147,10 +149,10 @@ export default function RegistrationPanel({ data, userId, userName, userRole, me
       if (!saved) setFeedback("對帳註記尚未儲存，請重試。");
     } else {
       try {
-        const response = await fetch("/api/registration-forms", { method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ formId:selected.id, submissionId:submission.id, paymentStatus:nextSubmission.paymentStatus ?? "unpaid", paymentNote:nextSubmission.paymentNote ?? "" }) });
+        const response = await fetch("/api/registration-forms", { method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ formId:selected.id, submissionId:submission.id, paymentStatus:nextSubmission.paymentStatus ?? "unpaid", paymentNote:nextSubmission.paymentNote ?? "", feeRevision, resolveRecheck }) });
         const body = await response.json() as {error?:string};
         if (!response.ok) throw new Error(body.error || "對帳註記尚未儲存");
-        setRemoteSubmissions((rows) => rows.map((row) => row.id === submission.id ? nextSubmission : row));
+        setRemoteSubmissions((rows) => rows.map((row) => row.id === submission.id ? { ...nextSubmission, feeRecheckReason: resolveRecheck ? "" : row.feeRecheckReason, feeFollowup: ["paid","refunded","not_required"].includes(nextSubmission.paymentStatus ?? "") ? false : row.feeFollowup } : row));
       } catch (reason) { setFeedback(reason instanceof Error ? reason.message : "對帳註記尚未儲存"); }
     }
     setReconciliationBusy("");
@@ -181,8 +183,8 @@ export default function RegistrationPanel({ data, userId, userName, userRole, me
         <RegistrationImage value={selected.image} alt={`${selected.title} 主題圖片`} /><p className="registration-privacy">🔒 {selected.privacyNotice}</p>
         <div className="registration-metrics"><div><small>問題</small><strong>{selected.fields.length}</strong></div><div><small>報名筆數</small><strong>{selectedSubmissions.length}</strong></div><div><small>個資欄位</small><strong>{selected.fields.filter((row) => row.sensitive).length}</strong></div></div>
         <section className="registration-reminders" aria-label="活動提醒"><div><h3>參加者提醒</h3><p>依活動日期自動排定前 5 天與前 1 天提醒，共 {reminderRows.length} 位有電子郵件。</p></div><div className="registration-reminder-grid"><article><small>活動前 5 天</small><strong>{reminderSchedule.five_days || "未設定活動日"}</strong><button disabled={!reminderRows.length || !reminderSchedule.five_days} onClick={() => void prepareReminder("five_days")}>準備通知內容</button></article><article><small>活動前 1 天</small><strong>{reminderSchedule.one_day || "未設定活動日"}</strong><button disabled={!reminderRows.length || !reminderSchedule.one_day} onClick={() => void prepareReminder("one_day")}>準備通知內容</button></article></div></section>
-        <div className="registration-submission-head"><div><h3>報名名單</h3><small>預設遮蔽個資；顯示與匯出僅限總召以上。已有填答後會鎖定問題結構，保留歷史資料欄位。</small></div><div className="page-actions">{canSeePrivate && <><button disabled={!selectedSubmissions.length} onClick={() => setReveal(!reveal)}>{reveal ? "遮蔽個資" : "顯示個資"}</button><button onClick={() => void exportResponses()}>匯出 Excel</button></>}</div></div>
-        {selectedSubmissions.length ? <div className="registration-table-scroll"><table><thead><tr><th>提交時間</th><th>對帳</th><th>對帳註記</th>{selected.fields.map((field) => <th key={field.id}>{field.label}{field.sensitive ? " 🔒" : ""}</th>)}</tr></thead><tbody>{selectedSubmissions.map((submission) => <tr key={submission.id}><td>{new Date(submission.submittedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })}</td><td><select className="registration-payment-select" disabled={reconciliationBusy === submission.id || !canEditForm} value={submission.paymentStatus ?? "unpaid"} onChange={(event) => void updateReconciliation(submission, { paymentStatus:event.target.value as RegistrationPaymentStatus })}>{Object.entries(paymentLabels).map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></td><td><input className="registration-payment-note" aria-label={`${submission.id} 對帳註記`} disabled={reconciliationBusy === submission.id || !canEditForm} defaultValue={submission.paymentNote ?? ""} placeholder="匯款末五碼／備註" maxLength={1000} onBlur={(event) => { if (event.target.value !== (submission.paymentNote ?? "")) void updateReconciliation(submission, { paymentNote:event.target.value }); }} /></td>{selected.fields.map((field) => { const raw = submission.answers[field.id]; const value = Array.isArray(raw) ? raw.join("、") : String(raw ?? ""); return <td key={field.id}>{field.sensitive && !reveal ? mask(value) : value || "—"}</td>; })}</tr>)}</tbody></table></div> : <div className="empty">尚無報名資料。表單開放後，可複製專屬連結給參加者。</div>}
+        <div className="registration-submission-head"><div><h3>報名名單</h3><p>目前報名費：{(preview ? activity.feeAmount ?? 0 : feeAmount) === 0 ? "免費" : `新台幣 ${(preview ? activity.feeAmount ?? 0 : feeAmount).toLocaleString("zh-TW")} 元`}</p><small>預設遮蔽個資；顯示與匯出僅限總召以上。已有填答後會鎖定問題結構，保留歷史資料欄位。</small></div><div className="page-actions">{canSeePrivate && <><button disabled={!selectedSubmissions.length} onClick={() => setReveal(!reveal)}>{reveal ? "遮蔽個資" : "顯示個資"}</button><button onClick={() => void exportResponses()}>匯出 Excel</button></>}</div></div>
+        {selectedSubmissions.length ? <div className="registration-table-scroll"><table><thead><tr><th>提交時間</th><th>對帳</th><th>對帳註記</th>{selected.fields.map((field) => <th key={field.id}>{field.label}{field.sensitive ? " 🔒" : ""}</th>)}</tr></thead><tbody>{selectedSubmissions.map((submission) => <tr key={submission.id}><td>{new Date(submission.submittedAt).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })}</td><td>{submission.feeFollowup && <p>待追蹤付款</p>}{submission.feeRecheckReason && <p>{submission.feeRecheckReason === "refund" ? "需重新核對退款" : "費用已變更，需重新核對"}；歷史實付金額請由管理員核對。</p>}{submission.feeRecheckReason && ["admin", "manager"].includes(userRole ?? "") && <button type="button" disabled={Boolean(reconciliationBusy)} onClick={() => void updateReconciliation(submission, submission.feeRecheckReason === "refund" ? { paymentStatus: "refunded" } : {}, true)}>{submission.feeRecheckReason === "refund" ? "確認退款已處理" : "確認差額已處理"}</button>}<select className="registration-payment-select" disabled={reconciliationBusy === submission.id || !canEditForm || Boolean(submission.feeRecheckReason)} value={submission.paymentStatus ?? "unpaid"} onChange={(event) => void updateReconciliation(submission, { paymentStatus:event.target.value as RegistrationPaymentStatus })}>{Object.entries(paymentLabels).map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></td><td><input className="registration-payment-note" aria-label={`${submission.id} 對帳註記`} disabled={reconciliationBusy === submission.id || !canEditForm} defaultValue={submission.paymentNote ?? ""} placeholder="匯款末五碼／備註" maxLength={1000} onBlur={(event) => { if (event.target.value !== (submission.paymentNote ?? "")) void updateReconciliation(submission, { paymentNote:event.target.value }); }} /></td>{selected.fields.map((field) => { const raw = submission.answers[field.id]; const value = Array.isArray(raw) ? raw.join("、") : String(raw ?? ""); return <td key={field.id}>{field.sensitive && !reveal ? mask(value) : value || "—"}</td>; })}</tr>)}</tbody></table></div> : <div className="empty">尚無報名資料。表單開放後，可複製專屬連結給參加者。</div>}
       </> : <div className="empty">建立第一份表單後，可設定問題、分享連結與匯出名單。</div>}</div>
     </div>}
     {feedback && <p className="registration-feedback" role="status">{feedback}</p>}

@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 
 const slug = "a".repeat(32);
 const form = { id: "f1", activityId: "a1", title: "Test form", status: "open", privacyNotice: "Notice", fields: [{ id: "name", label: "Name", type: "short_text", required: true, profileKey: "displayName", sensitive: true }] };
-const publicData = { form, activity: { name: "Activity" }, formVersion: 7 };
+const publicData = { form, activity: { name: "Activity" }, formVersion: 7, feeAmount: 100, feeRevision: 3 };
 
 test("isolated browser: unified registration and legacy compatibility", { timeout: 120000 }, async (t) => {
   const virtual = "virtual:registration-test";
@@ -74,6 +74,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       const post = calls.find(c => c.method === "POST");
       assert.equal(post.path, `/api/public/registrations/${slug}`);
       assert.equal(post.body.answers.name, "Legacy");
+      assert.equal(post.body.feeRevision, 3);
       assert.equal(post.body.website, "");
       await page.close();
     });
@@ -97,6 +98,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
         await page.getByRole("button", { name: label, exact: true }).click();
         assert.equal(await page.getByLabel("Name").count(), 0);
         await page.getByLabel("Name").waitFor();
+        assert.match(await page.locator('body').innerText(), /報名費：新台幣 100 元/);
         assert.equal(await page.getByLabel("Name").inputValue(), name);
         await page.getByLabel("Name").fill("Edited");
         await page.locator("#registration-privacy-consent").check();
@@ -106,6 +108,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
         assert.equal(post.headers["x-participant-identity"], identity);
         assert.equal(post.body.answers.name, "Edited");
         assert.equal(post.body.formVersion, 7);
+        assert.equal(post.body.feeRevision, 3);
         assert.equal(post.body.consent, true);
         assert.equal(calls.some(c => c.path === `/api/public/registrations/${slug}` && c.method === "POST"), false);
         assert.equal(await page.getByRole("button", { name: "送出報名" }).count(), 0);

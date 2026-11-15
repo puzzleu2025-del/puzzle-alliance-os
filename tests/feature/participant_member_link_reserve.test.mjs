@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 
 const files = readdirSync('drizzle').filter(name => /^\d{4}_.+\.sql$/.test(name)).sort();
 const target = '0013_participant_member_links.sql';
-assert.equal(files.at(-1), target);
+assert.ok(files.includes(target));
 const apply = (db, names) => { for (const name of names) db.exec(readFileSync(`drizzle/${name}`, 'utf8')); };
 function database(names) {
   const db = new DatabaseSync(':memory:');
@@ -40,7 +40,7 @@ test('fresh database has an empty reserved link table', () => {
 });
 
 test('upgrade never links same-email accounts and preserves registration and QR rows', () => {
-  const db = database(files.filter(name => name !== target));
+  const db = database(files.filter(name => name < target));
   try {
     seed(db);
     const old = Object.fromEntries(['members', 'participants', 'registration_submissions', 'registration_identities', 'registration_qr_tokens'].map(table => [table, rows(db, table)]));

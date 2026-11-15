@@ -27,8 +27,9 @@ export async function GET(_request: Request, context: { params: Promise<{ slug: 
   const workspace = await env.DB!.prepare("SELECT data FROM workspace_states WHERE id=1").first<{data:string}>();
   const activity = publicActivity(workspace?.data, loaded.row.activityId);
   if (!activity) return Response.json({ error: "活動不存在" }, { status: 404, headers: noStore });
+  const fee = await env.DB!.prepare("SELECT amount,revision FROM activity_fees WHERE activity_id=?").bind(loaded.row.activityId).first<{amount:number;revision:number}>();
   const { form } = loaded;
-  return Response.json({ activity, formVersion: loaded.row.version, form: { id:form.id,activityId:form.activityId,title:form.title,description:form.description,image:form.image,status:form.status,fields:form.fields,submitLabel:form.submitLabel,confirmationMessage:form.confirmationMessage,createdAt:form.createdAt,updatedAt:form.updatedAt,privacyNotice:form.privacyNotice } }, { headers: noStore });
+  return Response.json({ activity, feeAmount: fee?.amount ?? 0, feeRevision: fee?.revision ?? 0, formVersion: loaded.row.version, form: { id:form.id,activityId:form.activityId,title:form.title,description:form.description,image:form.image,status:form.status,fields:form.fields,submitLabel:form.submitLabel,confirmationMessage:form.confirmationMessage,createdAt:form.createdAt,updatedAt:form.updatedAt,privacyNotice:form.privacyNotice } }, { headers: noStore });
 }
 
 export async function POST(request: Request, context: { params: Promise<{ slug: string }> }) {
@@ -36,7 +37,7 @@ export async function POST(request: Request, context: { params: Promise<{ slug: 
   const { slug } = await context.params;
   const loaded = await load(slug);
   if (!loaded || loaded.form.status !== "open") return Response.json({ error: "表單已截止或不存在" }, { status: 404, headers: noStore });
-  let body: {answers?:unknown;consent?:boolean;idempotencyKey?:unknown;website?:unknown};
+  let body: {answers?:unknown;consent?:boolean;idempotencyKey?:unknown;website?:unknown;feeRevision?:unknown};
   try { const text = await request.text(); if (text.length > 60_000) throw new Error(); body = JSON.parse(text); } catch { return Response.json({ error: "填寫資料格式錯誤" }, { status: 400, headers: noStore }); }
   if (body.website) return Response.json({ ok: true }, { headers: noStore });
   if (body.consent !== true) return Response.json({ error: "必須同意個資告知" }, { status: 400, headers: noStore });
@@ -48,9 +49,14 @@ export async function POST(request: Request, context: { params: Promise<{ slug: 
   const sourceHash = await tokenHash(`registration:${loaded.row.id}:${ip}`);
   if (await rateLimited(`registration:${sourceHash}`)) return Response.json({ error: "送出次數過多，請稍後再試" }, { status: 429, headers: noStore });
   const idempotencyHash = await tokenHash(`${loaded.row.id}:${idempotencyKey}`);
+  const expectedFeeRevision = body.feeRevision === undefined ? 0 : body.feeRevision;
+  if (!Number.isSafeInteger(expectedFeeRevision) || (expectedFeeRevision as number) < 0) return Response.json({ error: "費用版本無效，請重新載入" }, { status: 400, headers: noStore });
+  const prior = await env.DB!.prepare("SELECT id FROM registration_submissions WHERE form_id=? AND idempotency_hash=?").bind(loaded.row.id,idempotencyHash).first<{id:string}>();
+  if (prior) return Response.json({ ok:true, receiptId:prior.id, confirmationMessage:loaded.form.confirmationMessage }, { headers: noStore });
   const id = crypto.randomUUID(), now = new Date().toISOString();
   try {
-    await env.DB!.prepare("INSERT INTO registration_submissions (id,form_id,form_version,schema_json,answers_json,consent,idempotency_hash,source_hash,submitted_at) VALUES (?,?,?,?,?,1,?,?,?)").bind(id,loaded.row.id,loaded.row.version,JSON.stringify(loaded.form.fields),JSON.stringify(validation.answers),idempotencyHash,sourceHash,now).run();
+    const write = await env.DB!.prepare("INSERT INTO registration_submissions (id,form_id,form_version,schema_json,answers_json,consent,idempotency_hash,source_hash,submitted_at,payment_status) SELECT ?,f.id,f.version,?,?,1,?,?,?,CASE WHEN COALESCE((SELECT amount FROM activity_fees WHERE activity_id=f.activity_id),0)=0 THEN 'not_required' ELSE 'unpaid' END FROM registration_forms f WHERE f.id=? AND f.status='open' AND f.version=? AND COALESCE((SELECT revision FROM activity_fees WHERE activity_id=f.activity_id),0)=?").bind(id,JSON.stringify(loaded.form.fields),JSON.stringify(validation.answers),idempotencyHash,sourceHash,now,loaded.row.id,loaded.row.version,expectedFeeRevision).run();
+    if (!write.meta.changes) return Response.json({ error: "報名費或表單已變更，請重新載入並確認" }, { status: 409, headers: noStore });
   } catch {
     const prior = await env.DB!.prepare("SELECT id FROM registration_submissions WHERE form_id=? AND idempotency_hash=?").bind(loaded.row.id,idempotencyHash).first<{id:string}>();
     if (prior) return Response.json({ ok:true, receiptId:prior.id, confirmationMessage:loaded.form.confirmationMessage }, { headers: noStore });

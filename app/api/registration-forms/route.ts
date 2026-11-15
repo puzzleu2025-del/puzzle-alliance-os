@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { csrfError, getMember, randomToken } from "@/app/admin-auth";
+import { csrfError, currentToken, getMember, randomToken, tokenHash } from "@/app/admin-auth";
 import { normalizeRegistrationForm, normalizeRegistrationText, registrationPresentationError, registrationAnswerStructure, REGISTRATION_REQUEST_LIMIT, type RegistrationForm, type RegistrationPaymentStatus, type RegistrationSubmission } from "@/app/registration-types";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ type ActivityAccess = { id: string; owner?: string; proxy?: string; coordinatorI
 type AccessUser = { role: string; userId: string; displayName: string };
 
 async function activityAccess(activityId: string, user: AccessUser) {
-  const workspace = await env.DB!.prepare("SELECT data FROM workspace_states WHERE id=1").first<{ data: string }>();
+  const workspace = await env.DB!.prepare("SELECT data,version FROM workspace_states WHERE id=1").first<{ data: string; version: number }>();
   let activity: ActivityAccess | undefined;
   try { activity = (JSON.parse(workspace?.data ?? "{}") as { activities?: ActivityAccess[] }).activities?.find((row) => row.id === activityId); } catch {}
   if (!activity) return { error: Response.json({ error: "找不到所屬活動" }, { status: 404, headers: noStore }) };
@@ -33,7 +33,7 @@ async function activityAccess(activityId: string, user: AccessUser) {
       ? activity.coordinatorIds?.includes(user.userId) === true
       : uniqueSelfName && [activity.owner, activity.proxy].some((name) => name?.trim() === user.displayName.trim()));
   if (!isManager && !assigned) return { error: Response.json({ error: "沒有這場活動的授權" }, { status: 403, headers: noStore }) };
-  return { activity, isManager };
+  return { activity, isManager, workspaceVersion: workspace?.version ?? 0 };
 }
 
 function writeAccess(access: Awaited<ReturnType<typeof activityAccess>>) {
@@ -54,16 +54,17 @@ export async function GET(request: Request) {
   const activityId = new URL(request.url).searchParams.get("activityId")?.trim() ?? "";
   if (!activityId || activityId.length > 100) return Response.json({ error: "活動編號無效" }, { status: 400, headers: noStore });
   const access = await activityAccess(activityId, auth.user!); if (access.error) return access.error;
+  const fee = await env.DB!.prepare("SELECT amount,revision FROM activity_fees WHERE activity_id=?").bind(activityId).first<{amount:number;revision:number}>();
   const result = await env.DB!.prepare("SELECT id,activity_id AS activityId,slug,schema_json AS schemaJson,version FROM registration_forms WHERE activity_id=? ORDER BY created_at").bind(activityId).all<FormRow>();
   const forms = result.results.flatMap((row) => { try { const form = rowToForm(row); return form ? [form] : []; } catch { return []; } });
   const ids = forms.map((form) => form.id);
   let submissions: RegistrationSubmission[] = [];
   const canSeeResponses = auth.user!.role !== "trainee_coordinator";
   if (ids.length && canSeeResponses) {
-    const rows = await env.DB!.prepare("SELECT id,form_id AS formId,answers_json AS answersJson,consent,payment_status AS paymentStatus,payment_note AS paymentNote,reminder_5d_sent_at AS reminderFiveDaysSentAt,reminder_1d_sent_at AS reminderOneDaySentAt,submitted_at AS submittedAt FROM registration_submissions WHERE form_id=? ORDER BY submitted_at DESC").bind(ids[0]).all<{id:string;formId:string;answersJson:string;consent:number;paymentStatus:RegistrationPaymentStatus;paymentNote:string;reminderFiveDaysSentAt:string|null;reminderOneDaySentAt:string|null;submittedAt:string}>();
-    submissions = rows.results.flatMap((row) => { try { return [{ id: row.id, formId: row.formId, activityId, answers: JSON.parse(row.answersJson), consent: row.consent === 1, status: "submitted" as const, paymentStatus: row.paymentStatus, paymentNote: row.paymentNote || undefined, reminderFiveDaysSentAt: row.reminderFiveDaysSentAt || undefined, reminderOneDaySentAt: row.reminderOneDaySentAt || undefined, submittedAt: row.submittedAt }]; } catch { return []; } });
+    const rows = await env.DB!.prepare("SELECT id,form_id AS formId,answers_json AS answersJson,consent,payment_status AS paymentStatus,payment_note AS paymentNote,fee_followup AS feeFollowup,fee_recheck_reason AS feeRecheckReason,reminder_5d_sent_at AS reminderFiveDaysSentAt,reminder_1d_sent_at AS reminderOneDaySentAt,submitted_at AS submittedAt FROM registration_submissions WHERE form_id=? ORDER BY submitted_at DESC").bind(ids[0]).all<{id:string;formId:string;answersJson:string;consent:number;paymentStatus:RegistrationPaymentStatus;paymentNote:string;feeFollowup:number;feeRecheckReason:"price_change"|"refund"|"";reminderFiveDaysSentAt:string|null;reminderOneDaySentAt:string|null;submittedAt:string}>();
+    submissions = rows.results.flatMap((row) => { try { return [{ id: row.id, formId: row.formId, activityId, answers: JSON.parse(row.answersJson), consent: row.consent === 1, status: "submitted" as const, paymentStatus: row.paymentStatus, paymentNote: row.paymentNote || undefined, feeFollowup: row.feeFollowup === 1, feeRecheckReason: row.feeRecheckReason, reminderFiveDaysSentAt: row.reminderFiveDaysSentAt || undefined, reminderOneDaySentAt: row.reminderOneDaySentAt || undefined, submittedAt: row.submittedAt }]; } catch { return []; } });
   }
-  return Response.json({ forms, submissions, permission: canSeeResponses ? "admin" : "form_editor" }, { headers: noStore });
+  return Response.json({ forms, submissions, feeAmount: fee?.amount ?? 0, feeRevision: fee?.revision ?? 0, permission: canSeeResponses ? "admin" : "form_editor" }, { headers: noStore });
 }
 
 export async function POST(request: Request) {
@@ -126,7 +127,7 @@ export async function PUT(request: Request) {
 export async function PATCH(request: Request) {
   const csrf = csrfError(request); if (csrf) return csrf;
   const auth = await authorize(); if (auth.error) return auth.error;
-  let body: {formId?:unknown;submissionId?:unknown;paymentStatus?:unknown;paymentNote?:unknown};
+  let body: {formId?:unknown;submissionId?:unknown;paymentStatus?:unknown;paymentNote?:unknown;feeRevision?:unknown;resolveRecheck?:unknown};
   try { body = await request.json(); } catch { return Response.json({ error: "對帳資料格式錯誤" }, { status: 400, headers: noStore }); }
   const formId = String(body.formId ?? "").trim(), submissionId = String(body.submissionId ?? "").trim();
   const paymentStatus = String(body.paymentStatus ?? "") as RegistrationPaymentStatus;
@@ -138,8 +139,25 @@ export async function PATCH(request: Request) {
   if (!form) return Response.json({ error: "找不到報名表" }, { status: 404, headers: noStore });
   const access = await activityAccess(form.activityId, auth.user!);
   const permissionError = writeAccess(access); if (permissionError) return permissionError;
-  const result = await env.DB!.prepare("UPDATE registration_submissions SET payment_status=?,payment_note=? WHERE id=? AND form_id=?").bind(paymentStatus,paymentNote,submissionId,formId).run();
-  if (!result.meta.changes) return Response.json({ error: "找不到報名資料" }, { status: 404, headers: noStore });
-  await env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) VALUES (?,?,'registration_submission',?,?)").bind(auth.user!.userId,"update_registration_reconciliation",submissionId,new Date().toISOString()).run();
+  const feeRevision = body.feeRevision === undefined ? 0 : body.feeRevision;
+  if (!Number.isSafeInteger(feeRevision) || (feeRevision as number) < 0 || (body.resolveRecheck !== undefined && typeof body.resolveRecheck !== "boolean")) return Response.json({ error: "費用版本無效，請重新載入" }, { status: 400, headers: noStore });
+  if (body.resolveRecheck === true && !access.isManager) return Response.json({ error: "重新核對由管理員處理" }, { status: 403, headers: noStore });
+  const sessionToken = await currentToken();
+  if (!/^[a-f0-9]{64}$/.test(sessionToken)) return Response.json({ error: "登入已失效" }, { status: 401, headers: noStore });
+  const sessionHash = await tokenHash(sessionToken), nonce = crypto.randomUUID(), now = new Date().toISOString();
+  const result = await env.DB!.batch([
+    env.DB!.prepare(`UPDATE registration_submissions SET payment_status=?,payment_note=?,
+      fee_recheck_reason=CASE WHEN ?=1 THEN '' ELSE fee_recheck_reason END,
+      fee_followup=CASE WHEN ? IN ('paid','refunded','not_required') THEN 0 ELSE fee_followup END,reconciliation_nonce=?
+      WHERE id=? AND form_id=? AND (fee_recheck_reason='' OR ?=1)
+      AND (fee_recheck_reason<>'refund' OR ?='refunded')
+      AND COALESCE((SELECT revision FROM activity_fees WHERE activity_id=?),0)=?
+      AND EXISTS (SELECT 1 FROM workspace_states WHERE id=1 AND version=?)
+      AND EXISTS (SELECT 1 FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND m.status='active' AND m.user_id=? AND m.role=?)`)
+      .bind(paymentStatus,paymentNote,body.resolveRecheck === true ? 1 : 0,paymentStatus,nonce,submissionId,formId,body.resolveRecheck === true ? 1 : 0,paymentStatus,form.activityId,feeRevision,access.workspaceVersion,sessionHash,Date.now(),auth.user!.userId,auth.user!.role),
+    env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'registration_submission',?,? WHERE EXISTS (SELECT 1 FROM registration_submissions WHERE id=? AND form_id=? AND reconciliation_nonce=?)")
+      .bind(auth.user!.userId,"update_registration_reconciliation",submissionId,now,submissionId,formId,nonce),
+  ]);
+  if (result[0].meta.changes !== 1) return Response.json({ error: "費用、權限或對帳狀態已變更，請重新載入；需重新核對者請由管理員處理" }, { status: 409, headers: noStore });
   return Response.json({ ok: true, paymentStatus, paymentNote }, { headers: noStore });
 }

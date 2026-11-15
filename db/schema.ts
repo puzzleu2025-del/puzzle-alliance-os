@@ -14,7 +14,7 @@ export const workspaceStates = sqliteTable("workspace_states", {
   updatedAt: text("updated_at").notNull(), updatedBy: text("updated_by").notNull(), writeNonce: text("write_nonce"),
 });
 export const meetings = sqliteTable("meetings", {
-  id: text("id").primaryKey(), activityId: text("activity_id").notNull(), position: integer("position").notNull(), data: text("data").notNull(),
+  id: text("id").primaryKey(), activityId: text("activity_id"), position: integer("position").notNull(), data: text("data").notNull(),
 }, (table) => [index("meetings_activity_idx").on(table.activityId)]);
 export const auditLogs = sqliteTable("audit_logs", {
   id: integer("id").primaryKey({ autoIncrement: true }), actorId: text("actor_id").notNull(), action: text("action").notNull(),
@@ -57,6 +57,17 @@ export const registrationForms = sqliteTable("registration_forms", {
   uniqueIndex("registration_forms_slug_unique").on(table.slug),
 ]);
 
+// Prices are separate from the editable workspace blob so price confirmation
+// and reconciliation can atomically compare a server-controlled revision.
+export const activityFees = sqliteTable("activity_fees", {
+  activityId: text("activity_id").primaryKey(),
+  amount: integer("amount").notNull(),
+  revision: integer("revision").notNull(),
+}, (table) => [
+  check("activity_fees_amount_valid", sql`${table.amount} >= 0 AND ${table.amount} <= 9007199254740991`),
+  check("activity_fees_revision_valid", sql`${table.revision} >= 1`),
+]);
+
 export const registrationSubmissions = sqliteTable("registration_submissions", {
   id: text("id").primaryKey(),
   formId: text("form_id").notNull().references(() => registrationForms.id),
@@ -66,6 +77,9 @@ export const registrationSubmissions = sqliteTable("registration_submissions", {
   consent: integer("consent", { mode: "boolean" }).notNull(),
   paymentStatus: text("payment_status").notNull().default("unpaid"),
   paymentNote: text("payment_note").notNull().default(""),
+  feeFollowup: integer("fee_followup", { mode: "boolean" }).notNull().default(false),
+  feeRecheckReason: text("fee_recheck_reason").notNull().default(""),
+  reconciliationNonce: text("reconciliation_nonce"),
   reminderFiveDaysSentAt: text("reminder_5d_sent_at"),
   reminderOneDaySentAt: text("reminder_1d_sent_at"),
   idempotencyHash: text("idempotency_hash").notNull(),

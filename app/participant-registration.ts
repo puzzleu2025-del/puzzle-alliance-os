@@ -21,14 +21,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function validBody(value: unknown): value is { answers: Record<string, unknown>; consent: true; idempotencyKey: string; formVersion: number } {
-  if (!isRecord(value) || Object.keys(value).length !== 4 ||
+function validBody(value: unknown): value is { answers: Record<string, unknown>; consent: true; idempotencyKey: string; formVersion: number; feeRevision?: number } {
+  if (!isRecord(value) || ![4, 5].includes(Object.keys(value).length) ||
       !["answers", "consent", "idempotencyKey", "formVersion"].every((key) => Object.hasOwn(value, key)) ||
+      Object.keys(value).some((key) => !["answers", "consent", "idempotencyKey", "formVersion", "feeRevision"].includes(key)) ||
       !isRecord(value.answers) || value.consent !== true ||
       typeof value.idempotencyKey !== "string" || value.idempotencyKey.length > 100 ||
       !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value.idempotencyKey) ||
       /[\x00-\x20\x7f]/.test(value.idempotencyKey) ||
-      !Number.isSafeInteger(value.formVersion) || (value.formVersion as number) < 1) return false;
+      !Number.isSafeInteger(value.formVersion) || (value.formVersion as number) < 1 ||
+      (value.feeRevision !== undefined && (!Number.isSafeInteger(value.feeRevision) || (value.feeRevision as number) < 0))) return false;
   try {
     return new TextEncoder().encode(JSON.stringify(value)).byteLength <= 60_000;
   } catch {
@@ -106,9 +108,9 @@ export async function submitParticipantRegistration(
     try {
       const result = await db.batch([
         db.prepare(
-          `INSERT INTO registration_submissions (id,form_id,form_version,schema_json,answers_json,consent,idempotency_hash,source_hash,submitted_at) SELECT ?,f.id,f.version,?,?,1,?,?,? FROM registration_forms f WHERE f.id=? AND f.status='open' AND f.version=? AND f.schema_json=? AND ${auth} AND NOT EXISTS (SELECT 1 FROM registration_identities i WHERE i.form_id=f.id AND i.status='active' AND i.${ownerColumn}=?) ON CONFLICT(form_id,idempotency_hash) DO NOTHING`,
+          `INSERT INTO registration_submissions (id,form_id,form_version,schema_json,answers_json,consent,idempotency_hash,source_hash,submitted_at,payment_status) SELECT ?,f.id,f.version,?,?,1,?,?,?,CASE WHEN COALESCE((SELECT amount FROM activity_fees WHERE activity_id=f.activity_id),0)=0 THEN 'not_required' ELSE 'unpaid' END FROM registration_forms f WHERE f.id=? AND f.status='open' AND f.version=? AND f.schema_json=? AND COALESCE((SELECT revision FROM activity_fees WHERE activity_id=f.activity_id),0)=? AND ${auth} AND NOT EXISTS (SELECT 1 FROM registration_identities i WHERE i.form_id=f.id AND i.status='active' AND i.${ownerColumn}=?) ON CONFLICT(form_id,idempotency_hash) DO NOTHING`,
         ).bind(id, JSON.stringify(form.fields), JSON.stringify(validation.answers), idempotencyHash, sourceHash, timestamp,
-          formRow.id, formRow.version, formRow.schemaJson, tokenHash, owner.id, owner.id),
+          formRow.id, formRow.version, formRow.schemaJson, submission.feeRevision ?? 0, tokenHash, owner.id, owner.id),
         db.prepare(
           `INSERT INTO registration_identities (submission_id,form_id,member_id,participant_id) SELECT s.id,s.form_id,?,? FROM registration_submissions s WHERE s.id=? AND s.form_id=? AND ${auth}`,
         ).bind(ownerMember, ownerParticipant, id, formRow.id, tokenHash, owner.id),
@@ -131,6 +133,8 @@ export async function submitParticipantRegistration(
       .bind(formRow.id).first<{ status: string; version: number; schemaJson: string }>();
     if (!currentForm || currentForm.status !== "open" || currentForm.version !== formRow.version ||
         currentForm.schemaJson !== formRow.schemaJson) return { ok: false, code: "closed" };
+    const feeRevision = await db.prepare("SELECT COALESCE((SELECT revision FROM activity_fees WHERE activity_id=(SELECT activity_id FROM registration_forms WHERE id=?)),0) AS revision").bind(formRow.id).first<{revision:number}>();
+    if (!feeRevision || feeRevision.revision !== (submission.feeRevision ?? 0)) return { ok: false, code: "conflict" };
     const active = await db.prepare(`SELECT 1 AS ok FROM registration_identities WHERE form_id=? AND ${ownerColumn}=? AND status='active'`)
       .bind(formRow.id, owner.id).first();
     return { ok: false, code: active ? "conflict" : "unavailable" };

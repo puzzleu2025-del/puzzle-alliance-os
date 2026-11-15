@@ -29,6 +29,7 @@ export type Activity = {
   teams?: string[];
   progress?: number;
   budget?: number | string;
+  feeAmount?: number;
   type?: string;
   size?: string;
   targetAttendance?: number;
@@ -76,6 +77,8 @@ export type Meeting = {
   activityId: string;
   time: string;
   status: string;
+  meetingScope?: "organization";
+  invitedMemberIds?: string[];
   type?: string;
   organizer?: string;
   recorder?: string;
@@ -417,6 +420,7 @@ function ActivityFields({ activity, userName, members, disabled }: { activity?: 
     <label>活動規模<input name="size" maxLength={100} defaultValue={activity?.size} placeholder="例：中型、50 人" /></label>
     <label>目標人數<input name="targetAttendance" type="number" min="0" step="1" inputMode="numeric" defaultValue={activity?.targetAttendance} /></label>
     <label>預算<input name="budget" type="number" min="0" step="1" inputMode="numeric" defaultValue={activity?.budget} /></label>
+    <label>報名費（新台幣整元，0 為免費）<input name="feeAmount" type="number" min="0" max="9007199254740991" step="1" inputMode="numeric" defaultValue={activity?.feeAmount ?? 0} required /></label>
     <label>活動主責<MemberSelect name="owner" members={members} defaultValue={activity?.owner || userName} required /></label>
     <label>職務代理<MemberSelect name="proxy" members={members} defaultValue={activity?.proxy} /></label>
     <label className="mgmt-span-2">場地<input name="location" maxLength={200} defaultValue={activity?.location} /></label>
@@ -467,6 +471,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
       location: field(form, "location"),
       teams: commaList(field(form, "teams")),
       budget: field(form, "budget"),
+      feeAmount: Number(field(form, "feeAmount")),
       type: field(form, "type"),
       size: field(form, "size"),
       targetAttendance: Number(field(form, "targetAttendance")) || undefined,
@@ -878,13 +883,14 @@ function meetingResponses(meeting: Meeting): MeetingAttendee[] {
 
 export function MeetingsPanel({ data, userId, userName, userRole, memberOptions = [], busy, onSave }: ManagementPanelProps) {
   const [creating, setCreating] = useState(false);
+  const [meetingIsOrg, setMeetingIsOrg] = useState(false);
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [failed, setFailed] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const visibleMeetings = data.meetings.filter((meeting) => (canViewHistory(userRole) && showHistory) || !meetingEnded(meeting));
   const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userName, userRole));
-  const canEditMeeting = (meeting: Meeting) => canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userName, userRole);
+  const canEditMeeting = (meeting: Meeting) => meeting.meetingScope === "organization" ? ["admin", "manager"].includes(userRole ?? "") || (userRole === "coordinator" && !!userId && meeting.invitedMemberIds?.includes(userId) === true) : canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userName, userRole);
   const canManageAttendance = ["admin", "manager"].includes(userRole ?? "");
   const uniqueSelfName = memberOptions.filter((person) => person.name.trim() === userName.trim()).length === 1;
 
@@ -892,7 +898,8 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
     event.preventDefault();
     if (submitting || busy) return;
     const form = new FormData(event.currentTarget);
-    const attendees = unique(form.getAll("attendees").map(String).filter(Boolean));
+    const invitedMemberIds = meetingIsOrg ? unique([...form.getAll("invitedMemberIds").map(String).filter(Boolean), ...(userId ? [userId] : [])]) : [];
+    const attendees = meetingIsOrg ? unique(memberOptions.filter(person => invitedMemberIds.includes(person.id)).map(person => person.name)) : unique(form.getAll("attendees").map(String).filter(Boolean));
     const start = field(form, "time");
     const end = field(form, "endTime");
     if (start && end && end <= start) {
@@ -905,7 +912,8 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
     const item: Meeting = {
       id: uid(),
       title: field(form, "title"),
-      activityId: field(form, "activityId"),
+      activityId: meetingIsOrg ? "" : field(form, "activityId"),
+      ...(meetingIsOrg ? { meetingScope: "organization" as const, invitedMemberIds } : {}),
       time: start ? `${start}:00+08:00` : "",
       status: "待確認",
       type: field(form, "type"),
@@ -971,10 +979,12 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
       input.addEventListener("input", () => input.setCustomValidity(""), { once: true });
       return;
     }
-    const attendees = unique(form.getAll("attendees").map(String).filter(Boolean));
+    const invitedMemberIds = editing.meetingScope === "organization" ? unique(form.getAll("invitedMemberIds").map(String).filter(Boolean)) : [];
+    const attendees = editing.meetingScope === "organization" ? unique(memberOptions.filter(person => invitedMemberIds.includes(person.id)).map(person => person.name)) : unique(form.getAll("attendees").map(String).filter(Boolean));
     const attendeeResponses = attendees.map((name) => editing.attendeeResponses?.find((person) => person.name === name) ?? { name, response: "待回覆" as const });
     const item: Meeting = {
       ...editing, title: field(form, "title"), activityId: field(form, "activityId"),
+      ...(editing.meetingScope === "organization" ? { invitedMemberIds } : {}),
       time: `${start}:00+08:00`, endTime: `${end}:00+08:00`, status: field(form, "status"),
       type: field(form, "type"), organizer: field(form, "organizer"), recorder: field(form, "recorder"),
       location: field(form, "location"), meetingLink: field(form, "meetingLink"), agenda: field(form, "agenda"),
@@ -987,13 +997,13 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
   };
 
   return <>
-    <div className="page-heading"><div><h2>會議協調</h2><p className="muted">主持、記錄、議程、地點與出席回覆放在同一張會議卡。</p></div>{configurableActivities.length > 0 && <button className="primary" onClick={() => { setFailed(false); setCreating(true); }}>＋ 安排會議</button>}</div>
+    <div className="page-heading"><div><h2>會議協調</h2><p className="muted">主持、記錄、議程、地點與出席回覆放在同一張會議卡。</p></div>{(configurableActivities.length > 0 || ["admin", "manager", "coordinator"].includes(userRole ?? "")) && <button className="primary" onClick={() => { setFailed(false); setMeetingIsOrg(false); setCreating(true); }}>＋ 安排會議</button>}</div>
     {failed && !creating && <FormStatus failed />}
     {canManageAttendance && <label className="mgmt-history-toggle"><input type="checkbox" checked={showHistory} onChange={(event) => setShowHistory(event.target.checked)} />顯示已結束會議</label>}
-    {visibleMeetings.length ? <div className="mgmt-meeting-grid">{visibleMeetings.map((meeting) => { const stats = attendance(meeting); const responseRows = meetingResponses(meeting); const link = safeMeetingUrl(meeting.meetingLink); return <article className="mgmt-meeting-card" key={meeting.id}><div className="mgmt-card-head"><span className={`badge${meeting.status === "已確認" ? " green" : ""}`}>{meeting.status}</span><span>{meeting.type || "工作會議"}</span></div><h3>{meeting.title}</h3><p className="muted">{activityName(data, meeting.activityId)}</p><dl className="mgmt-compact-list"><div><dt>開始</dt><dd>{dateLabel(meeting.time)}</dd></div><div><dt>結束</dt><dd>{dateLabel(meeting.endTime)}</dd></div><div><dt>主持</dt><dd>{meeting.organizer || "未指派"}</dd></div><div><dt>記錄</dt><dd>{meeting.recorder || "未指派"}</dd></div><div><dt>地點</dt><dd>{meeting.location || "未設定"}</dd></div><div><dt>線上連結</dt><dd>{link ? <a href={link} target="_blank" rel="noreferrer">開啟會議連結</a> : "未設定"}</dd></div><div><dt>出席回覆</dt><dd>{stats.attending} 出席／{stats.pending} 待回覆／共 {stats.total}</dd></div></dl>{responseRows.length ? <section className="mgmt-attendance"><small>逐人回覆</small>{responseRows.map((person) => <label key={person.name}><span>{person.name}</span><select aria-label={`${person.name}的出席回覆`} value={person.response} disabled={submitting || busy || (!canManageAttendance && (!uniqueSelfName || person.name.trim() !== userName.trim()))} onChange={(event) => void updateResponse(meeting, person.name, event.target.value as MeetingAttendee["response"])}><option>待回覆</option><option>出席</option><option>可能出席</option><option>不出席</option></select></label>)}</section> : null}<section className="mgmt-agenda"><small>議程</small><p>{meeting.agenda || "尚未加入議程。"}</p></section>{meeting.status !== "已確認" && canEditMeeting(meeting) && <button className="mgmt-wide-button" disabled={submitting || busy} onClick={() => void confirm(meeting)}>{submitting || busy ? "儲存中…" : "確認會議（保留回覆）"}</button>}{canEditMeeting(meeting) && <button className="mgmt-wide-button" onClick={() => { setFailed(false); setEditing(meeting); }}>編輯會議</button>}</article>; })}</div> : <div className="empty">還沒有會議。需要同步決策時再安排即可。</div>}
+    {visibleMeetings.length ? <div className="mgmt-meeting-grid">{visibleMeetings.map((meeting) => { const stats = attendance(meeting); const responseRows = meetingResponses(meeting); const link = safeMeetingUrl(meeting.meetingLink); return <article className="mgmt-meeting-card" key={meeting.id}><div className="mgmt-card-head"><span className={`badge${meeting.status === "已確認" ? " green" : ""}`}>{meeting.status}</span><span>{meeting.type || "工作會議"}</span></div><h3>{meeting.title}</h3><p className="muted">{meeting.meetingScope === "organization" ? "組織會議" : activityName(data, meeting.activityId)}</p><dl className="mgmt-compact-list"><div><dt>開始</dt><dd>{dateLabel(meeting.time)}</dd></div><div><dt>結束</dt><dd>{dateLabel(meeting.endTime)}</dd></div><div><dt>主持</dt><dd>{meeting.organizer || "未指派"}</dd></div><div><dt>記錄</dt><dd>{meeting.recorder || "未指派"}</dd></div><div><dt>地點</dt><dd>{meeting.location || "未設定"}</dd></div><div><dt>線上連結</dt><dd>{link ? <a href={link} target="_blank" rel="noreferrer">開啟會議連結</a> : "未設定"}</dd></div><div><dt>出席回覆</dt><dd>{stats.attending} 出席／{stats.pending} 待回覆／共 {stats.total}</dd></div></dl>{responseRows.length ? <section className="mgmt-attendance"><small>逐人回覆</small>{responseRows.map((person) => <label key={person.name}><span>{person.name}</span><select aria-label={`${person.name}的出席回覆`} value={person.response} disabled={submitting || busy || (!canManageAttendance && (!uniqueSelfName || person.name.trim() !== userName.trim()))} onChange={(event) => void updateResponse(meeting, person.name, event.target.value as MeetingAttendee["response"])}><option>待回覆</option><option>出席</option><option>可能出席</option><option>不出席</option></select></label>)}</section> : null}<section className="mgmt-agenda"><small>議程</small><p>{meeting.agenda || "尚未加入議程。"}</p></section>{meeting.status !== "已確認" && canEditMeeting(meeting) && <button className="mgmt-wide-button" disabled={submitting || busy} onClick={() => void confirm(meeting)}>{submitting || busy ? "儲存中…" : "確認會議（保留回覆）"}</button>}{canEditMeeting(meeting) && <button className="mgmt-wide-button" onClick={() => { setFailed(false); setEditing(meeting); }}>編輯會議</button>}</article>; })}</div> : <div className="empty">還沒有會議。需要同步決策時再安排即可。</div>}
     {creating && <Dialog title="安排會議" close={() => !submitting && !busy && setCreating(false)} wide><form onSubmit={submit}><FormStatus failed={failed} /><fieldset disabled={submitting || busy} className="mgmt-form-grid">
       <label className="mgmt-span-2">會議名稱<input name="title" required maxLength={200} autoFocus /></label>
-      <label>所屬活動<select name="activityId" required><option value="">請選擇活動</option>{configurableActivities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
+      <label>所屬活動<select name="activityId" required onChange={(event) => setMeetingIsOrg(event.currentTarget.value === "__organization__")}><option value="">請選擇活動或組織會議</option><option value="__organization__">組織會議（不綁活動）</option>{configurableActivities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
       <label>會議類型<select name="type" defaultValue="工作會議"><option>工作會議</option><option>決策會議</option><option>檢討會議</option><option>說明會</option><option>其他</option></select></label>
       <label>主持人<MemberSelect name="organizer" members={memberOptions} defaultValue={userName} required /></label>
       <label>記錄人<MemberSelect name="recorder" members={memberOptions} required /></label>
@@ -1001,12 +1011,12 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
       <label>結束時間<input name="endTime" type="datetime-local" required /></label>
       <label>地點<input name="location" maxLength={200} /></label>
       <label>線上會議連結<input name="meetingLink" type="url" maxLength={1000} placeholder="https://" /></label>
-      <label className="mgmt-span-2">出席者<MemberMultiSelect name="attendees" members={memberOptions} /><small>可按 Ctrl／⌘ 選取多位；成員登入後可回覆自己的出席狀態。</small></label>
+      {meetingIsOrg ? <label className="mgmt-span-2">受邀者<select name="invitedMemberIds" multiple size={Math.min(6, Math.max(3, memberOptions.length))}>{memberOptions.map(person => <option key={person.id} value={person.id}>{person.name}（@{person.username}）</option>)}</select><small>建立者會自動受邀。</small></label> : <label className="mgmt-span-2">出席者<MemberMultiSelect name="attendees" members={memberOptions} /><small>可按 Ctrl／⌘ 選取多位；成員登入後可回覆自己的出席狀態。</small></label>}
       <label className="mgmt-span-2">議程<textarea name="agenda" required maxLength={5000} /></label>
     </fieldset><div className="mgmt-dialog-actions"><button type="button" disabled={submitting || busy} onClick={() => setCreating(false)}>取消</button><button className="primary" disabled={submitting || busy} type="submit">{submitting || busy ? "儲存中…" : "建立並同步"}</button></div></form></Dialog>}
     {editing && <Dialog title={`編輯會議：${editing.title}`} close={() => !submitting && !busy && setEditing(null)} wide><form onSubmit={(event) => void saveEdit(event)}><FormStatus failed={failed} /><fieldset disabled={submitting || busy} className="mgmt-form-grid">
       <label className="mgmt-span-2">會議名稱<input name="title" required maxLength={200} defaultValue={editing.title} autoFocus /></label>
-      <label>所屬活動<select name="activityId" required defaultValue={editing.activityId}>{configurableActivities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
+      <label>所屬活動<select name="activityId" defaultValue={editing.activityId}>{editing.meetingScope === "organization" ? <option value="">組織會議（不綁活動）</option> : configurableActivities.map((activity) => <option value={activity.id} key={activity.id}>{activity.name}</option>)}</select></label>
       <label>會議類型<select name="type" defaultValue={editing.type || "工作會議"}><option>工作會議</option><option>決策會議</option><option>檢討會議</option><option>說明會</option><option>其他</option></select></label>
       <label>狀態<select name="status" defaultValue={editing.status}><option>待確認</option><option>已確認</option><option>已完成</option><option>已取消</option></select></label>
       <label>主持人<MemberSelect name="organizer" members={memberOptions} defaultValue={editing.organizer} required /></label>
@@ -1015,7 +1025,7 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
       <label>結束時間<input name="endTime" type="datetime-local" required defaultValue={editing.endTime?.slice(0, 16)} /></label>
       <label>地點<input name="location" maxLength={200} defaultValue={editing.location} /></label>
       <label>線上會議連結<input name="meetingLink" type="url" maxLength={1000} defaultValue={editing.meetingLink} /></label>
-      <label className="mgmt-span-2">出席者<MemberMultiSelect name="attendees" members={memberOptions} defaultValues={editing.attendees} /><small>可按 Ctrl／⌘ 選取多位。</small></label>
+      {editing.meetingScope === "organization" ? <label className="mgmt-span-2">受邀者<select name="invitedMemberIds" multiple size={Math.min(6, Math.max(3, memberOptions.length))} defaultValue={editing.invitedMemberIds}>{memberOptions.map(person => <option key={person.id} value={person.id}>{person.name}（@{person.username}）</option>)}</select></label> : <label className="mgmt-span-2">出席者<MemberMultiSelect name="attendees" members={memberOptions} defaultValues={editing.attendees} /><small>可按 Ctrl／⌘ 選取多位。</small></label>}
       <label className="mgmt-span-2">議程<textarea name="agenda" maxLength={5000} defaultValue={editing.agenda} /></label>
     </fieldset><div className="mgmt-dialog-actions"><button type="button" disabled={submitting || busy} onClick={() => setEditing(null)}>取消</button><button className="primary" disabled={submitting || busy} type="submit">儲存會議變更</button></div></form></Dialog>}
   </>;

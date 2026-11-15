@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { getMember } from "./admin-auth";
 import SiteHome, { type SiteAnnouncement } from "./site/site-home";
 import { readPublicSite, type PublicSite } from "./site-public";
+import { buildSiteContent, readSiteContent, type SiteContent } from "./site-content";
 
 export const dynamic = "force-dynamic";
 
@@ -23,9 +24,20 @@ async function loadSite(now: Date): Promise<PublicSite> {
   }
 }
 
+async function loadContent(): Promise<SiteContent> {
+  if (!env.DB) return buildSiteContent(undefined).content;
+  try {
+    return await readSiteContent(env.DB);
+  } catch (error) {
+    // Editable copy falls back to the code defaults when it cannot be read.
+    console.error("site content unavailable", error);
+    return buildSiteContent(undefined).content;
+  }
+}
+
 export default async function Home() {
   const now = new Date();
-  const [member, site] = await Promise.all([getMember().catch(() => null), loadSite(now)]);
+  const [member, site, content] = await Promise.all([getMember().catch(() => null), loadSite(now), loadContent()]);
   const announcements: SiteAnnouncement[] = site.announcements.map((item) => {
     const updated = new Date(item.updatedAt);
     return { id: item.id, title: item.title, body: item.body, day: Number.isNaN(updated.getTime()) ? "" : taipeiDay(updated) };
@@ -34,6 +46,7 @@ export default async function Home() {
     <SiteHome
       activities={site.activities}
       announcements={announcements}
+      content={content}
       today={taipeiDay(now)}
       signedIn={Boolean(member)}
     />

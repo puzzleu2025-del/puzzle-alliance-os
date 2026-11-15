@@ -20,7 +20,7 @@ export default function RegistrationClient({ slug }: { slug: string }) {
   if (error) return <main className="signin-page"><section className="signin-card"><h1>目前無法報名</h1><p className="muted">{error}</p></section></main>;
   if (!payload) return <main className="signin-page"><section className="signin-card"><p>正在載入報名表…</p></section></main>;
   return <>{submitError && <p role="alert">{submitError}</p>}<RegistrationPublic form={payload.form} activityName={payload.activity.name} feeAmount={payload.feeAmount} onSubmit={async (submission:RegistrationSubmission) => {
-    const response = await fetch(`/api/public/registrations/${encodeURIComponent(slug)}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({answers:submission.answers,consent:submission.consent,idempotencyKey:submission.id,feeRevision:payload.feeRevision,website:""}) });
+    const response = await fetch(`/api/public/registrations/${encodeURIComponent(slug)}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({answers:submission.answers,consent:submission.consent,idempotencyKey:submission.id,feeRevision:payload.feeRevision,remittanceLast5:submission.remittanceLast5 ?? "",website:""}) });
     if (response.status === 409) setSubmitError("報名費或表單已變更，請重新載入並確認。");
     return response.ok;
   }} /></>;

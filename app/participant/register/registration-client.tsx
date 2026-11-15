@@ -84,7 +84,7 @@ function RegistrationFlow({ slug, identity, onBack }: { slug: string; identity: 
 
   async function submit(submission: RegistrationSubmission): Promise<boolean> {
     if (!loaded || uncertain || done.current || pending.current) return false;
-    const body = JSON.stringify({ slug, answers: submission.answers, consent: submission.consent, idempotencyKey: crypto.randomUUID(), formVersion: loaded.version, feeRevision: loaded.feeRevision });
+    const body = JSON.stringify({ slug, answers: submission.answers, consent: submission.consent, idempotencyKey: crypto.randomUUID(), formVersion: loaded.version, feeRevision: loaded.feeRevision, remittanceLast5: submission.remittanceLast5 ?? "" });
     retry.current = body;
     return send(body, false);
   }

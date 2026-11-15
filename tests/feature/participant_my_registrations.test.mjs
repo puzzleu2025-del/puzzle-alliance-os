@@ -46,7 +46,7 @@ test("selected cookie isolates matching email, old anonymous, cancelled and clos
     const before = f.sqlite.prepare("SELECT total_changes() AS n").get().n;
     const member = await listMyRegistrations(f.db, "member", both);
     const participant = await listMyRegistrations(f.db, "participant", both);
-    assert.deepEqual(member, { ok: true, registrations: [{ submissionId: "member", title: "Title member", submittedAt: "2026-01-01T00:00:00.000Z" }], nextCursor: null });
+    assert.deepEqual(member, { ok: true, registrations: [{ submissionId: "member", title: "Title member", submittedAt: "2026-01-01T00:00:00.000Z", feeAmount: 0, remittanceLast5: "" }], nextCursor: null });
     assert.deepEqual(participant.registrations.map(row => row.submissionId), ["participant"]);
     assert.deepEqual((await listMyRegistrations(f.db, "member", otherCookie)).registrations.map(row => row.submissionId), ["other"]);
     assert.equal(f.sqlite.prepare("SELECT total_changes() AS n").get().n, before);

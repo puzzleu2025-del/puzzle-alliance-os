@@ -90,15 +90,13 @@ test('granted coordinator cannot change the fee after settings are submitted; ma
   } finally { db.close(); }
 });
 
-test('coordinator who is not granted the activity cannot set its fee', async () => {
+test('a coordinator manages activities by default, so another coordinator can set the fee while it is open', async () => {
   const db = setup({ coordinatorIds: ['other'] });
   try {
     as('coord', 'coordinator', 'Lead');
     db.exec("UPDATE admin_sessions SET user_id='coord'");
     const result = await put(stateWith(activity({ coordinatorIds: ['other'], feeAmount: 100 })));
-    assert.equal(result.status, 403);
-    assert.match((await result.json()).error, /尚未提交設定/);
-    assert.equal(feeRows(db), 0);
-    assert.equal(workspaceVersion(db), 5);
+    assert.equal(result.status, 200);
+    assert.equal(db.prepare("SELECT amount FROM activity_fees WHERE activity_id='a'").get().amount, 100);
   } finally { db.close(); }
 });

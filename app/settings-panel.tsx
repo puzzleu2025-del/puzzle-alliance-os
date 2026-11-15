@@ -11,6 +11,7 @@ export default function SettingsPanel({preview,version,sync,audit,refresh,onLogo
   const [matrix,setMatrix]=useState(false);
   return <><div className="page-heading"><div><h2>系統設定</h2><p className="muted">帳號安全、同步機制、角色權限與稽核紀錄</p></div></div><div className="settings-grid">
     <AccountCard preview={preview} onLogout={onLogout}/>
+    <RetentionCard preview={preview}/>
     <article className="card"><h3>同步機制</h3><p>{preview?"GitHub Pages 互動版會把資料保存在這個瀏覽器。":"共用資料庫每 45 秒或返回視窗時更新。"}</p><p>{sync} · 資料版本 {version}</p>{!preview&&<button onClick={refresh}>立即同步</button>}</article>
     <article className="card"><h3>角色與權限設定</h3><p>成員角色由系統管理員在「成員管理」調整。</p><button aria-expanded={matrix} onClick={()=>setMatrix(!matrix)}>{matrix?"收合權限矩陣":"查看權限矩陣"}</button></article>
     <article className="card"><h3>稽核紀錄</h3><p>查看誰在什麼時間執行了哪些操作。</p><small>{preview?"以下只記錄目前瀏覽器的操作。":"顯示最近 50 筆已儲存操作。"}</small><div className="audit-list">{audit.length?audit.map(a=><div className="row" key={a.id}><div><b>{actions[a.action]||a.action}</b><small>{a.actor}</small><small>{new Date(a.createdAt).toLocaleString("zh-TW",{timeZone:"Asia/Taipei"})}</small></div></div>):<p>尚無操作紀錄</p>}</div></article>
@@ -85,5 +86,65 @@ function AccountCard({preview,onLogout}:{preview:boolean;onLogout?:()=>void}) {
     {account&&<form className="account-form" onSubmit={saveProfile}><b>編輯個人資料</b><label htmlFor="account-name">姓名</label><input id="account-name" name="displayName" defaultValue={account.displayName} required maxLength={100}/><label htmlFor="account-phone">聯絡電話</label><input id="account-phone" name="phone" type="tel" defaultValue={account.phone} maxLength={24}/><label htmlFor="account-email">Email</label><input id="account-email" name="email" type="email" defaultValue={account.email} maxLength={254}/><label htmlFor="account-organization">所屬單位</label><input id="account-organization" name="organization" defaultValue={account.organization} maxLength={100}/><label htmlFor="account-position">職務／身分</label><input id="account-position" name="position" defaultValue={account.position} maxLength={100}/><button className="primary" disabled={busy}>{busy?"儲存中…":"儲存個人資料"}</button></form>}
     {account&&<form className="account-form" onSubmit={changePassword}><b>變更密碼</b><label htmlFor="account-current">目前密碼</label><input id="account-current" name="currentPassword" type="password" autoComplete="current-password" required maxLength={256}/><label htmlFor="account-new">新密碼（至少 6 個字元）</label><input id="account-new" name="newPassword" type="password" autoComplete="new-password" required minLength={6} maxLength={256}/><label htmlFor="account-confirm">再次輸入新密碼</label><input id="account-confirm" name="confirmPassword" type="password" autoComplete="new-password" required minLength={6} maxLength={256}/><button className="primary" disabled={busy}>{busy?"儲存中…":"儲存密碼"}</button></form>}
     <p role="status">{message}</p><button disabled={busy} onClick={async()=>{setBusy(true);if(preview){onLogout?.();return;}try{const response=await fetch("/api/auth/logout",{method:"POST"});if(!response.ok)throw new Error("登出失敗，請重試");router.replace("/");router.refresh();}catch(error){setMessage(error instanceof Error?error.message:"登出失敗");setBusy(false);}}}>登出此裝置</button>
+  </article>;
+}
+
+type RetentionStatus = {retentionYears:number;minYears:number;maxYears:number;cutoff:string;dueCount:number;archivedCount:number;heldWithoutActivity:number};
+
+// Visible only to system administrators; the API answers 403 for everyone else and the card stays hidden.
+function RetentionCard({preview}:{preview:boolean}) {
+  const [status,setStatus]=useState<RetentionStatus|null>(null);
+  const [years,setYears]=useState("");
+  const [busy,setBusy]=useState(false),[message,setMessage]=useState("");
+  const load=async()=>{
+    const response=await fetch("/api/retention",{cache:"no-store"});
+    if(!response.ok){setStatus(null);return;}
+    const data=await response.json() as RetentionStatus;
+    setStatus(data);setYears(String(data.retentionYears));
+  };
+  useEffect(()=>{
+    if(preview)return;
+    let alive=true;
+    fetch("/api/retention",{cache:"no-store"}).then(async response=>{
+      if(!alive||!response.ok)return;
+      const data=await response.json() as RetentionStatus;
+      if(alive){setStatus(data);setYears(String(data.retentionYears));}
+    }).catch(()=>undefined);
+    return()=>{alive=false;};
+  },[preview]);
+  if(preview||!status)return null;
+
+  const saveYears=async(event:FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();if(busy)return;
+    const value=Number(years);
+    if(!Number.isInteger(value)||value<status.minYears||value>status.maxYears){setMessage(`保存年限須為 ${status.minYears} 至 ${status.maxYears} 年`);return;}
+    setBusy(true);setMessage("");
+    try{
+      const response=await fetch("/api/retention",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({retentionYears:value})});
+      const result=await response.json() as {error?:string};
+      if(!response.ok)throw new Error(result.error||"保存年限未儲存");
+      await load();setMessage("保存年限已更新。");
+    }catch(error){setMessage(error instanceof Error?error.message:"無法連線");}finally{setBusy(false);}
+  };
+
+  const archiveDue=async()=>{
+    if(busy||status.dueCount===0)return;
+    if(!window.confirm(`將封存 ${status.dueCount} 筆最後參加活動日期早於 ${status.cutoff} 的報名資料。封存後只有系統管理員可見，確定執行？`))return;
+    setBusy(true);setMessage("");
+    try{
+      const response=await fetch("/api/retention",{method:"POST",headers:{"Content-Type":"application/json"}});
+      const result=await response.json() as {error?:string;archived?:number};
+      if(!response.ok)throw new Error(result.error||"封存未完成");
+      await load();setMessage(`已封存 ${result.archived??0} 筆報名資料。`);
+    }catch(error){setMessage(error instanceof Error?error.message:"無法連線");}finally{setBusy(false);}
+  };
+
+  return <article className="card"><h3>資料保存與封存</h3>
+    <p>參與者報名資料自最後參加活動日期起保存；屆滿後先移入封存，封存資料僅系統管理員可見，不列入一般名單與匯出。</p>
+    <small>目前保存年限：{status.retentionYears} 年；截止日 {status.cutoff} 以前的活動紀錄列為到期。</small>
+    <p>待封存 {status.dueCount} 筆 · 已封存 {status.archivedCount} 筆 · 無活動日期待確認 {status.heldWithoutActivity} 筆</p>
+    <form className="account-form" onSubmit={saveYears}><label htmlFor="retention-years">保存年限（{status.minYears}–{status.maxYears} 年）</label><input id="retention-years" type="number" min={status.minYears} max={status.maxYears} step={1} value={years} onChange={(event)=>setYears(event.target.value)} required/><button disabled={busy} type="submit">儲存年限</button></form>
+    <button disabled={busy||status.dueCount===0} type="button" onClick={()=>void archiveDue()}>檢查並封存到期資料</button>
+    <p role="status">{message}</p>
   </article>;
 }

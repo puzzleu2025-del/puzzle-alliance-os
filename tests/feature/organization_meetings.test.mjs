@@ -191,3 +191,35 @@ test('DB millisecond expiry expression preserves exact equality and boundaries',
     }
   }finally{db.close()}
 });
+
+test('non-invited coordinator cannot see, edit or inject an organization meeting',async()=>{const f=fixture();try{
+  const token='e'.repeat(64);
+  f.db.prepare('INSERT INTO members(user_id,username,email,display_name,role,status,created_at) VALUES(?,?,?,?,?,?,?)').run('coord2','coordinator2','o@example.test','Other Coordinator','coordinator','active','2026');
+  f.db.prepare('INSERT INTO admin_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(hashes(token),'coord2',Date.now()+60000);
+  tokens.coord2=token;
+  const outside=await read('coord2');
+  assert.ok(!outside.state.meetings.some(m=>m.id==='private'));
+  assert.doesNotMatch(JSON.stringify(outside),/Private Title|Secret Agenda|example\.test\/secret/);
+  const edited={...outside.state,meetings:[...outside.state.meetings,{...f.org,agenda:'Hijack'}]};
+  assert.equal((await put('coord2',edited,1,'edit_meeting')).status,403);
+  const hidden=f.db.prepare("SELECT data FROM meetings WHERE id='private'").get().data;
+  assert.equal(JSON.parse(hidden).agenda,'Secret Agenda');
+  const attendance={...outside.state,meetings:[...outside.state.meetings,{...f.org,attending:1}]};
+  assert.equal((await put('coord2',attendance,1,'update_meeting_attendance')).status,403);
+  assert.equal(f.db.prepare('SELECT version FROM workspace_states WHERE id=1').get().version,1);
+}finally{f.close()}});
+
+test('invited trainee coordinator can see an organization meeting but cannot edit it',async()=>{delete tokens.coord2;const f=fixture();try{
+  const token='f'.repeat(64);
+  f.db.prepare('INSERT INTO members(user_id,username,email,display_name,role,status,created_at) VALUES(?,?,?,?,?,?,?)').run('trainee','trainee123','t@example.test','Trainee','trainee_coordinator','active','2026');
+  f.db.prepare('INSERT INTO admin_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(hashes(token),'trainee',Date.now()+60000);
+  tokens.trainee=token;
+  const before=await read('admin');
+  const invited=before.state.meetings.map(m=>m.id==='private'?{...m,invitedMemberIds:['coord','invite','trainee']}:m);
+  assert.equal((await put('admin',{...before.state,meetings:invited},1,'edit_meeting')).status,200);
+  const seen=await read('trainee');
+  assert.ok(seen.state.meetings.some(m=>m.id==='private'));
+  const edited=seen.state.meetings.map(m=>m.id==='private'?{...m,agenda:'Trainee edit'}:m);
+  assert.equal((await put('trainee',{...seen.state,meetings:edited},2,'edit_meeting')).status,403);
+  assert.equal(JSON.parse(f.db.prepare("SELECT data FROM meetings WHERE id='private'").get().data).agenda,'Secret Agenda');
+}finally{f.close()}});

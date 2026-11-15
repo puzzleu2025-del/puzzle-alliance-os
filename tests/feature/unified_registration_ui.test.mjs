@@ -68,6 +68,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
     await t.test("legacy anonymous form still posts to its original API", async () => {
       const { page, calls } = await setup({ legacy: true });
       await page.getByLabel("Name").fill("Legacy");
+      await page.locator("#registration-remittance").fill("12345");
       await page.locator("#registration-privacy-consent").check();
       await page.getByRole("button", { name: "送出報名" }).click();
       await page.getByText("報名已送出").waitFor();
@@ -101,7 +102,8 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
         assert.match(await page.locator('body').innerText(), /報名費：新台幣 100 元/);
         assert.equal(await page.getByLabel("Name").inputValue(), name);
         await page.getByLabel("Name").fill("Edited");
-        await page.locator("#registration-privacy-consent").check();
+        await page.locator("#registration-remittance").fill("12345");
+      await page.locator("#registration-privacy-consent").check();
         await page.getByRole("button", { name: "送出報名" }).click();
         await page.getByText("報名已送出").waitFor();
         const post = calls.find(c => c.path === "/api/participant/registrations");
@@ -133,6 +135,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       const { page, calls, records } = await setup({ failFirst: true });
       await page.getByRole("button", { name: "會員", exact: true }).click();
       await page.getByLabel("Name").waitFor();
+      await page.locator("#registration-remittance").fill("12345");
       await page.locator("#registration-privacy-consent").check();
       await page.getByRole("button", { name: "送出報名" }).click();
       await page.getByText("無法確認原報名結果，請保留此頁，勿重新整理或關閉；請重試原內容，若仍無法確認請聯絡活動工作人員。").waitFor();
@@ -152,6 +155,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       const { page, calls, records } = await setup({ serverErrorFirst: true });
       await page.getByRole("button", { name: "會員", exact: true }).click();
       await page.getByLabel("Name").waitFor();
+      await page.locator("#registration-remittance").fill("12345");
       await page.locator("#registration-privacy-consent").check();
       await page.getByRole("button", { name: "送出報名" }).click();
       await page.getByText("無法確認原報名結果，請保留此頁，勿重新整理或關閉；請重試原內容，若仍無法確認請聯絡活動工作人員。").waitFor();
@@ -168,6 +172,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       const { page } = await setup({ conflict: true });
       await page.getByRole("button", { name: "會員", exact: true }).click();
       await page.getByLabel("Name").waitFor();
+      await page.locator("#registration-remittance").fill("12345");
       await page.locator("#registration-privacy-consent").check();
       await page.getByRole("button", { name: "送出報名" }).click();
       await page.getByText("報名狀態或表單可能已變更，請聯絡活動工作人員確認是否已報名，再重新整理。").waitFor();
@@ -178,6 +183,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       const { page, calls, records } = await setup({ rejectFirst: true });
       await page.getByRole("button", { name: "會員", exact: true }).click();
       await page.getByLabel("Name").waitFor();
+      await page.locator("#registration-remittance").fill("12345");
       await page.locator("#registration-privacy-consent").check();
       await page.getByRole("button", { name: "送出報名" }).click();
       await page.getByText("目前無法送出，請檢查資料後再試。").waitFor();
@@ -194,6 +200,7 @@ test("isolated browser: unified registration and legacy compatibility", { timeou
       const { page, calls } = await setup();
       await page.getByRole('button', { name: '會員', exact: true }).click();
       await page.getByLabel('Name').waitFor();
+      await page.locator('#registration-remittance').fill('12345');
       await page.locator('#registration-privacy-consent').check();
       await page.getByRole('button', { name: '送出報名' }).click();
       await page.getByRole('img', { name: '個人簽到 QR 碼' }).waitFor();

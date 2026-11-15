@@ -43,7 +43,7 @@ test("isolated browser: own registrations states, pagination and identity switch
       await page.getByRole("heading", { name: "我的報名" }).waitFor().catch(async error => { console.error("Rendered page:", await page.locator("body").innerText()); throw error; });
       return { page, calls };
     }
-    const entry = (id, title) => ({ submissionId: id, title, submittedAt: "2026-01-01T00:00:00.000Z" });
+    const entry = (id, title) => ({ submissionId: id, title, submittedAt: "2026-01-01T00:00:00.000Z", feeAmount: 0, remittanceLast5: "" });
     await t.test("pagination sends cursor, appends only own data and supports mobile", async () => {
       const next = { submittedAt: "2026-01-01T00:00:00.000Z", submissionId: "a" };
       const { page, calls } = await setup((route, item) => route.fulfill({ json: item.body.cursor ? { registrations: [entry("b", "Second")], nextCursor: null } : { registrations: [entry("a", "First")], nextCursor: next } }), true);

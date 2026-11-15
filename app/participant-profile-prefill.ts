@@ -89,7 +89,7 @@ export async function getParticipantProfilePrefill(
           `WITH recent AS (
             SELECT s.id,s.submitted_at,s.schema_json,s.answers_json
             FROM registration_identities i
-            JOIN registration_submissions s ON s.id=i.submission_id AND s.form_id=i.form_id
+            JOIN registration_submissions s ON s.id=i.submission_id AND s.form_id=i.form_id AND s.archived_at IS NULL
             JOIN participant_sessions ps ON ps.participant_id=i.participant_id
             JOIN participant_consent_state cs ON cs.participant_id=ps.participant_id AND cs.status='active' AND cs.epoch=ps.consent_epoch
             JOIN participant_terms_current t ON t.id=1 AND t.version=cs.terms_version

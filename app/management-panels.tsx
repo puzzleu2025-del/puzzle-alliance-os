@@ -121,12 +121,13 @@ export type ManagementPanelProps = {
   onOpenRegistrations?: (activityId: string) => void;
 };
 
-export function canConfigureActivity(activity: Activity | undefined, userId: string | undefined, userName: string, role?: string) {
+// Coordinators manage every open activity by default; a delegated trainee executes only that activity.
+export function canConfigureActivity(activity: Activity | undefined, userId: string | undefined, role?: string) {
   if (!activity) return false;
   if (role === "admin" || role === "manager") return true;
-  if (!["coordinator", "trainee_coordinator"].includes(role ?? "") || activity.settingsSubmittedAt) return false;
-  if (activity.coordinatorIds || activity.traineeCoordinatorId) return Boolean(userId && (activity.coordinatorIds?.includes(userId) || activity.traineeCoordinatorId === userId));
-  return role === "coordinator" && [activity.owner, activity.proxy].some((name) => name?.trim() === userName.trim());
+  if (activity.settingsSubmittedAt) return false;
+  if (role === "coordinator") return true;
+  return role === "trainee_coordinator" && activity.traineeCoordinatorId === userId;
 }
 
 const uid = () => crypto.randomUUID();
@@ -440,7 +441,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
   const [showHistory, setShowHistory] = useState(false);
   const visibleActivities = data.activities.filter((activity) => (canViewHistory(userRole) && showHistory) || !activityEnded(activity));
   const canManageAll = ["admin", "manager"].includes(userRole ?? "");
-  const canEditActivity = (activity: Activity) => canConfigureActivity(activity, userId, userName, userRole);
+  const canEditActivity = (activity: Activity) => canConfigureActivity(activity, userId, userRole);
   const submit = async (event: FormEvent<HTMLFormElement>, original?: Activity) => {
     event.preventDefault();
     if (submitting || busy) return;
@@ -613,6 +614,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
           })()}
           <p className="mgmt-detail-copy">{detail.description || "尚未加入活動說明。"}</p>
           {detail.settingsSubmittedAt && <p className="muted">設定已提交；後續細項由管理員修改。</p>}
+          {["admin", "manager", "coordinator"].includes(userRole ?? "") && canEditActivity(detail) && <label className="mgmt-span-2">見習總召（委派執行）<select value={detail.traineeCoordinatorId ?? ""} disabled={submitting || busy} onChange={async (event) => { const traineeCoordinatorId = event.currentTarget.value || undefined; const updated = { ...detail, traineeCoordinatorId }; setSubmitting(true); setFailed(false); const saved = await onSave({ ...data, activities: data.activities.map((row) => row.id === detail.id ? updated : row) }, "assign_activity_authority"); setSubmitting(false); if (saved) setDetail(updated); else setFailed(true); }}><option value="">未委派</option>{memberOptions.filter((person) => person.role === "trainee_coordinator").map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select><small>委派後由見習總召執行，總召仍協助。</small></label>}
           <div className="mgmt-dialog-actions">{canEditActivity(detail) && <button type="button" onClick={() => { setFailed(false); setEditing(detail); }}>編輯活動</button>}{!canManageAll && canEditActivity(detail) && <button type="button" className="primary" disabled={submitting || busy} onClick={async () => { if (!window.confirm("提交後，活動設定與相關細項須由管理員修改。確定提交？")) return; setSubmitting(true); const updated = { ...detail, settingsSubmittedAt: new Date().toISOString() }; const saved = await onSave({ ...data, activities: data.activities.map((row) => row.id === detail.id ? updated : row) }, "submit_activity"); setSubmitting(false); if (saved) setDetail(updated); }}>提交設定</button>}{canManageAll && detail.settingsSubmittedAt && <button type="button" disabled={submitting || busy} onClick={async () => { if (!window.confirm("重新開放總召設定？")) return; setSubmitting(true); const updated = { ...detail, settingsSubmittedAt: undefined }; const saved = await onSave({ ...data, activities: data.activities.map((row) => row.id === detail.id ? updated : row) }, "edit_activity"); setSubmitting(false); if (saved) setDetail(updated); }}>重新開放設定</button>}</div>
           <section className="mgmt-gantt-section">
             <div><h3>活動籌備甘特圖</h3><p className="muted">P1–P9 依活動舉辦日自動排出每週籌備內容；階段進度及日期可個別調整，不會建立額外任務。</p></div>
@@ -645,7 +647,7 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
       (statusFilter === "all" || task.status === statusFilter) &&
       (ownerFilter === "all" || task.assignee === ownerFilter),
   );
-  const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userName, userRole));
+  const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userRole));
 
   const applyPhaseSchedule = (form: HTMLFormElement) => {
     const activityId = (form.elements.namedItem("activityId") as HTMLSelectElement | null)?.value;
@@ -733,7 +735,7 @@ export function TasksPanel({ data, userId, userName, userRole, memberOptions = [
     else setFailed(true);
   };
 
-  const coordinatorOwnsTask = (task: Task) => canConfigureActivity(data.activities.find((activity) => activity.id === task.activityId), userId, userName, userRole);
+  const coordinatorOwnsTask = (task: Task) => canConfigureActivity(data.activities.find((activity) => activity.id === task.activityId), userId, userRole);
   const canEditTask = (task: Task) => ["admin", "manager"].includes(userRole ?? "") ||
     task.assignee.trim() === userName.trim() || coordinatorOwnsTask(task);
   const canEditAllTaskFields = (task: Task) => ["admin", "manager"].includes(userRole ?? "") ||
@@ -889,8 +891,8 @@ export function MeetingsPanel({ data, userId, userName, userRole, memberOptions 
   const [failed, setFailed] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const visibleMeetings = data.meetings.filter((meeting) => (canViewHistory(userRole) && showHistory) || !meetingEnded(meeting));
-  const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userName, userRole));
-  const canEditMeeting = (meeting: Meeting) => meeting.meetingScope === "organization" ? ["admin", "manager"].includes(userRole ?? "") || (userRole === "coordinator" && !!userId && meeting.invitedMemberIds?.includes(userId) === true) : canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userName, userRole);
+  const configurableActivities = data.activities.filter((activity) => canConfigureActivity(activity, userId, userRole));
+  const canEditMeeting = (meeting: Meeting) => meeting.meetingScope === "organization" ? ["admin", "manager"].includes(userRole ?? "") || (userRole === "coordinator" && !!userId && meeting.invitedMemberIds?.includes(userId) === true) : canConfigureActivity(data.activities.find((activity) => activity.id === meeting.activityId), userId, userRole);
   const canManageAttendance = ["admin", "manager"].includes(userRole ?? "");
   const uniqueSelfName = memberOptions.filter((person) => person.name.trim() === userName.trim()).length === 1;
 

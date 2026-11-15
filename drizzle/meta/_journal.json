@@ -120,6 +120,13 @@
       "when": 1794718293788,
       "tag": "0016_remittance_last5",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1794725418493,
+      "tag": "0017_retention_archive",
+      "breakpoints": true
     }
   ]
 }

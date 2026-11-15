@@ -22,18 +22,19 @@ async function activityAccess(activityId: string, user: AccessUser) {
   try { activity = (JSON.parse(workspace?.data ?? "{}") as { activities?: ActivityAccess[] }).activities?.find((row) => row.id === activityId); } catch {}
   if (!activity) return { error: Response.json({ error: "找不到所屬活動" }, { status: 404, headers: noStore }) };
   const isManager = user.role === "admin" || user.role === "manager";
-  const legacyNameGrant = user.role === "coordinator" && !Array.isArray(activity.coordinatorIds) && typeof activity.traineeCoordinatorId !== "string";
+  // Coordinators manage every activity by default; a trainee manages only the activity delegated to them.
+  const assigned = user.role === "trainee_coordinator" ? activity.traineeCoordinatorId === user.userId : user.role === "coordinator";
+  if (!isManager && !assigned) return { error: Response.json({ error: "沒有這場活動的授權" }, { status: 403, headers: noStore }) };
+  // Registrants' personal data and payment reconciliation still need an explicit per-activity coordinator grant.
+  const legacyNameGrant = user.role === "coordinator" && !Array.isArray(activity.coordinatorIds);
   const matchingNames = legacyNameGrant
     ? await env.DB!.prepare("SELECT user_id FROM members WHERE status='active' AND display_name=?").bind(user.displayName).all<{ user_id: string }>()
     : null;
   const uniqueSelfName = matchingNames?.results.length === 1 && matchingNames.results[0].user_id === user.userId;
-  const assigned = user.role === "trainee_coordinator"
-    ? activity.traineeCoordinatorId === user.userId
-    : user.role === "coordinator" && (Array.isArray(activity.coordinatorIds) || typeof activity.traineeCoordinatorId === "string"
-      ? activity.coordinatorIds?.includes(user.userId) === true
-      : uniqueSelfName && [activity.owner, activity.proxy].some((name) => name?.trim() === user.displayName.trim()));
-  if (!isManager && !assigned) return { error: Response.json({ error: "沒有這場活動的授權" }, { status: 403, headers: noStore }) };
-  return { activity, isManager, workspaceVersion: workspace?.version ?? 0 };
+  const dataGranted = user.role === "coordinator" && (Array.isArray(activity.coordinatorIds)
+    ? activity.coordinatorIds.includes(user.userId)
+    : uniqueSelfName && [activity.owner, activity.proxy].some((name) => name?.trim() === user.displayName.trim()));
+  return { activity, isManager, dataAccess: isManager || dataGranted, workspaceVersion: workspace?.version ?? 0 };
 }
 
 function writeAccess(access: Awaited<ReturnType<typeof activityAccess>>) {
@@ -59,10 +60,10 @@ export async function GET(request: Request) {
   const forms = result.results.flatMap((row) => { try { const form = rowToForm(row); return form ? [form] : []; } catch { return []; } });
   const ids = forms.map((form) => form.id);
   let submissions: RegistrationSubmission[] = [];
-  const canSeeResponses = auth.user!.role !== "trainee_coordinator";
+  const canSeeResponses = access.dataAccess === true;
   if (ids.length && canSeeResponses) {
-    const rows = await env.DB!.prepare("SELECT id,form_id AS formId,answers_json AS answersJson,consent,payment_status AS paymentStatus,payment_note AS paymentNote,remittance_last5 AS remittanceLast5,fee_followup AS feeFollowup,fee_recheck_reason AS feeRecheckReason,reminder_5d_sent_at AS reminderFiveDaysSentAt,reminder_1d_sent_at AS reminderOneDaySentAt,submitted_at AS submittedAt FROM registration_submissions WHERE form_id=? ORDER BY submitted_at DESC").bind(ids[0]).all<{id:string;formId:string;answersJson:string;consent:number;paymentStatus:RegistrationPaymentStatus;paymentNote:string;remittanceLast5:string;feeFollowup:number;feeRecheckReason:"price_change"|"refund"|"";reminderFiveDaysSentAt:string|null;reminderOneDaySentAt:string|null;submittedAt:string}>();
-    submissions = rows.results.flatMap((row) => { try { return [{ id: row.id, formId: row.formId, activityId, answers: JSON.parse(row.answersJson), consent: row.consent === 1, status: "submitted" as const, paymentStatus: row.paymentStatus, paymentNote: row.paymentNote || undefined, remittanceLast5: row.remittanceLast5 || undefined, feeFollowup: row.feeFollowup === 1, feeRecheckReason: row.feeRecheckReason, reminderFiveDaysSentAt: row.reminderFiveDaysSentAt || undefined, reminderOneDaySentAt: row.reminderOneDaySentAt || undefined, submittedAt: row.submittedAt }]; } catch { return []; } });
+    const rows = await env.DB!.prepare("SELECT id,form_id AS formId,answers_json AS answersJson,consent,archived_at AS archivedAt,payment_status AS paymentStatus,payment_note AS paymentNote,remittance_last5 AS remittanceLast5,fee_followup AS feeFollowup,fee_recheck_reason AS feeRecheckReason,reminder_5d_sent_at AS reminderFiveDaysSentAt,reminder_1d_sent_at AS reminderOneDaySentAt,submitted_at AS submittedAt FROM registration_submissions WHERE form_id=? AND (archived_at IS NULL OR ?=1) ORDER BY submitted_at DESC").bind(ids[0], auth.user!.role === "admin" ? 1 : 0).all<{id:string;formId:string;answersJson:string;consent:number;archivedAt:string|null;paymentStatus:RegistrationPaymentStatus;paymentNote:string;remittanceLast5:string;feeFollowup:number;feeRecheckReason:"price_change"|"refund"|"";reminderFiveDaysSentAt:string|null;reminderOneDaySentAt:string|null;submittedAt:string}>();
+    submissions = rows.results.flatMap((row) => { try { return [{ id: row.id, formId: row.formId, activityId, answers: JSON.parse(row.answersJson), consent: row.consent === 1, status: "submitted" as const, paymentStatus: row.paymentStatus, paymentNote: row.paymentNote || undefined, remittanceLast5: row.remittanceLast5 || undefined, feeFollowup: row.feeFollowup === 1, feeRecheckReason: row.feeRecheckReason, reminderFiveDaysSentAt: row.reminderFiveDaysSentAt || undefined, reminderOneDaySentAt: row.reminderOneDaySentAt || undefined, submittedAt: row.submittedAt, archivedAt: row.archivedAt || undefined }]; } catch { return []; } });
   }
   return Response.json({ forms, submissions, feeAmount: fee?.amount ?? 0, feeRevision: fee?.revision ?? 0, permission: canSeeResponses ? "admin" : "form_editor" }, { headers: noStore });
 }
@@ -140,13 +141,14 @@ export async function PATCH(request: Request) {
     if (!remittanceForm) return Response.json({ error: "找不到報名表" }, { status: 404, headers: noStore });
     const remittanceAccess = await activityAccess(remittanceForm.activityId, auth.user!);
     const remittancePermissionError = writeAccess(remittanceAccess); if (remittancePermissionError) return remittancePermissionError;
+    if (!remittanceAccess.dataAccess) return Response.json({ error: "報名個資與對帳資料需由管理員或獲授權的總召處理" }, { status: 403, headers: noStore });
     const remittanceToken = await currentToken();
     if (!/^[a-f0-9]{64}$/.test(remittanceToken)) return Response.json({ error: "登入已失效" }, { status: 401, headers: noStore });
     const remittanceNonce = crypto.randomUUID(), remittanceNow = new Date().toISOString();
     const remittanceResult = await env.DB!.batch([
-      env.DB!.prepare(`UPDATE registration_submissions SET remittance_last5=?,reconciliation_nonce=? WHERE id=? AND form_id=?
+      env.DB!.prepare(`UPDATE registration_submissions SET remittance_last5=?,reconciliation_nonce=? WHERE id=? AND form_id=? AND (archived_at IS NULL OR ?=1)
         AND EXISTS (SELECT 1 FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND m.status='active' AND m.user_id=? AND m.role=?)`)
-        .bind(remittanceLast5, remittanceNonce, submissionId, formId, await tokenHash(remittanceToken), Date.now(), auth.user!.userId, auth.user!.role),
+        .bind(remittanceLast5, remittanceNonce, submissionId, formId, auth.user!.role === "admin" ? 1 : 0, await tokenHash(remittanceToken), Date.now(), auth.user!.userId, auth.user!.role),
       env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'registration_submission',?,? WHERE EXISTS (SELECT 1 FROM registration_submissions WHERE id=? AND form_id=? AND reconciliation_nonce=?)")
         .bind(auth.user!.userId, "update_registration_remittance", submissionId, remittanceNow, submissionId, formId, remittanceNonce),
     ]);
@@ -161,6 +163,7 @@ export async function PATCH(request: Request) {
   if (!form) return Response.json({ error: "找不到報名表" }, { status: 404, headers: noStore });
   const access = await activityAccess(form.activityId, auth.user!);
   const permissionError = writeAccess(access); if (permissionError) return permissionError;
+  if (!access.dataAccess) return Response.json({ error: "報名個資與對帳資料需由管理員或獲授權的總召處理" }, { status: 403, headers: noStore });
   const feeRevision = body.feeRevision === undefined ? 0 : body.feeRevision;
   if (!Number.isSafeInteger(feeRevision) || (feeRevision as number) < 0 || (body.resolveRecheck !== undefined && typeof body.resolveRecheck !== "boolean")) return Response.json({ error: "費用版本無效，請重新載入" }, { status: 400, headers: noStore });
   if (body.resolveRecheck === true && !access.isManager) return Response.json({ error: "重新核對由管理員處理" }, { status: 403, headers: noStore });
@@ -171,12 +174,12 @@ export async function PATCH(request: Request) {
     env.DB!.prepare(`UPDATE registration_submissions SET payment_status=?,payment_note=?,
       fee_recheck_reason=CASE WHEN ?=1 THEN '' ELSE fee_recheck_reason END,
       fee_followup=CASE WHEN ? IN ('paid','refunded','not_required') THEN 0 ELSE fee_followup END,reconciliation_nonce=?
-      WHERE id=? AND form_id=? AND (fee_recheck_reason='' OR ?=1)
+      WHERE id=? AND form_id=? AND (archived_at IS NULL OR ?=1) AND (fee_recheck_reason='' OR ?=1)
       AND (fee_recheck_reason<>'refund' OR ?='refunded')
       AND COALESCE((SELECT revision FROM activity_fees WHERE activity_id=?),0)=?
       AND EXISTS (SELECT 1 FROM workspace_states WHERE id=1 AND version=?)
       AND EXISTS (SELECT 1 FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND m.status='active' AND m.user_id=? AND m.role=?)`)
-      .bind(paymentStatus,paymentNote,body.resolveRecheck === true ? 1 : 0,paymentStatus,nonce,submissionId,formId,body.resolveRecheck === true ? 1 : 0,paymentStatus,form.activityId,feeRevision,access.workspaceVersion,sessionHash,Date.now(),auth.user!.userId,auth.user!.role),
+      .bind(paymentStatus,paymentNote,body.resolveRecheck === true ? 1 : 0,paymentStatus,nonce,submissionId,formId,auth.user!.role === "admin" ? 1 : 0,body.resolveRecheck === true ? 1 : 0,paymentStatus,form.activityId,feeRevision,access.workspaceVersion,sessionHash,Date.now(),auth.user!.userId,auth.user!.role),
     env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'registration_submission',?,? WHERE EXISTS (SELECT 1 FROM registration_submissions WHERE id=? AND form_id=? AND reconciliation_nonce=?)")
       .bind(auth.user!.userId,"update_registration_reconciliation",submissionId,now,submissionId,formId,nonce),
   ]);

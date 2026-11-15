@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { csrfError, rateLimited, tokenHash } from "@/app/admin-auth";
-import { normalizeRegistrationForm, normalizeRegistrationId, normalizeRemittanceLast5, validateRegistrationSubmission } from "@/app/registration-types";
+import { normalizeRegistrationForm, normalizeRegistrationId, normalizeRemittanceLast5, remittanceMissing, REMITTANCE_REQUIRED_MESSAGE, validateRegistrationSubmission } from "@/app/registration-types";
+import { activityLastDate, taipeiDate } from "@/app/retention";
 
 export const dynamic = "force-dynamic";
 const noStore = { "Cache-Control": "no-store" };
@@ -11,6 +12,16 @@ async function load(slug: string) {
   const row = await env.DB.prepare("SELECT id,activity_id AS activityId,schema_json AS schemaJson,version FROM registration_forms WHERE slug=?").bind(slug).first<FormRow>();
   if (!row) return null;
   try { const form = normalizeRegistrationForm(JSON.parse(row.schemaJson)); return form ? { row, form } : null; } catch { return null; }
+}
+
+// The anonymous link stays open through the activity's last day (the later of its start and end dates).
+async function activityEnded(activityId: string): Promise<boolean> {
+  const workspace = await env.DB!.prepare("SELECT data FROM workspace_states WHERE id=1").first<{data:string}>();
+  try {
+    const activity = (JSON.parse(workspace?.data ?? "{}") as { activities?: Array<{ id?: unknown; date?: unknown; endDate?: unknown }> }).activities?.find((row) => row.id === activityId);
+    const last = activityLastDate(activity);
+    return last !== null && taipeiDate(new Date()) > last;
+  } catch { return false; }
 }
 
 function publicActivity(data: string | undefined, activityId: string) {
@@ -24,6 +35,7 @@ export async function GET(_request: Request, context: { params: Promise<{ slug: 
   const { slug } = await context.params;
   const loaded = await load(slug);
   if (!loaded || loaded.form.status !== "open") return Response.json({ error: "表單尚未開放或不存在" }, { status: 404, headers: noStore });
+  if (await activityEnded(loaded.row.activityId)) return Response.json({ error: "活動已結束，報名已截止" }, { status: 410, headers: noStore });
   const workspace = await env.DB!.prepare("SELECT data FROM workspace_states WHERE id=1").first<{data:string}>();
   const activity = publicActivity(workspace?.data, loaded.row.activityId);
   if (!activity) return Response.json({ error: "活動不存在" }, { status: 404, headers: noStore });
@@ -37,6 +49,7 @@ export async function POST(request: Request, context: { params: Promise<{ slug: 
   const { slug } = await context.params;
   const loaded = await load(slug);
   if (!loaded || loaded.form.status !== "open") return Response.json({ error: "表單已截止或不存在" }, { status: 404, headers: noStore });
+  if (await activityEnded(loaded.row.activityId)) return Response.json({ error: "活動已結束，報名已截止" }, { status: 410, headers: noStore });
   let body: {answers?:unknown;consent?:boolean;idempotencyKey?:unknown;website?:unknown;feeRevision?:unknown;remittanceLast5?:unknown};
   try { const text = await request.text(); if (text.length > 60_000) throw new Error(); body = JSON.parse(text); } catch { return Response.json({ error: "填寫資料格式錯誤" }, { status: 400, headers: noStore }); }
   if (body.website) return Response.json({ ok: true }, { headers: noStore });
@@ -53,6 +66,8 @@ export async function POST(request: Request, context: { params: Promise<{ slug: 
   if (!Number.isSafeInteger(expectedFeeRevision) || (expectedFeeRevision as number) < 0) return Response.json({ error: "費用版本無效，請重新載入" }, { status: 400, headers: noStore });
   const remittanceLast5 = normalizeRemittanceLast5(body.remittanceLast5);
   if (remittanceLast5 === null) return Response.json({ error: "匯款末五碼須為 5 位數字" }, { status: 400, headers: noStore });
+  const fee = await env.DB!.prepare("SELECT amount FROM activity_fees WHERE activity_id=?").bind(loaded.row.activityId).first<{amount:number}>();
+  if (remittanceMissing(fee?.amount ?? 0, remittanceLast5)) return Response.json({ error: REMITTANCE_REQUIRED_MESSAGE }, { status: 400, headers: noStore });
   const prior = await env.DB!.prepare("SELECT id FROM registration_submissions WHERE form_id=? AND idempotency_hash=?").bind(loaded.row.id,idempotencyHash).first<{id:string}>();
   if (prior) return Response.json({ ok:true, receiptId:prior.id, confirmationMessage:loaded.form.confirmationMessage }, { headers: noStore });
   const id = crypto.randomUUID(), now = new Date().toISOString();

@@ -31,7 +31,7 @@ export async function issueParticipantQr(
       !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(submissionId) || /[\x00-\x20\x7f]/.test(submissionId)) return null;
   const value = randomSecret();
   const row = await db.prepare(
-    `INSERT INTO registration_qr_tokens (token_hash,submission_id,issued_at,revoked_at) SELECT ?,i.submission_id,${DB_NOW},NULL FROM registration_identities i WHERE i.submission_id=? AND i.status='active' AND ${session.auth} RETURNING token_hash`,
+    `INSERT INTO registration_qr_tokens (token_hash,submission_id,issued_at,revoked_at) SELECT ?,i.submission_id,${DB_NOW},NULL FROM registration_identities i WHERE i.submission_id=? AND i.status='active' AND NOT EXISTS (SELECT 1 FROM registration_submissions x WHERE x.id=i.submission_id AND x.archived_at IS NOT NULL) AND ${session.auth} RETURNING token_hash`,
   ).bind(await secretHash(value), submissionId, await secretHash(session.token)).first();
   return row ? value : null;
 }

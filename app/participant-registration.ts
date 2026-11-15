@@ -2,7 +2,7 @@
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
 import { PARTICIPANT_SESSION_COOKIE, readCookie, secretHash } from "./participant-session.ts";
 // @ts-expect-error TS5097: shared tsconfig does not enable allowImportingTsExtensions.
-import { normalizeRegistrationForm, normalizeRemittanceLast5, validateRegistrationSubmission } from "./registration-types.ts";
+import { normalizeRegistrationForm, normalizeRemittanceLast5, remittanceMissing, validateRegistrationSubmission } from "./registration-types.ts";
 
 type PrincipalKind = "member" | "participant";
 type Outcome =
@@ -11,11 +11,11 @@ type Outcome =
 type FormRow = { id: string; status: string; version: number; schemaJson: string };
 type Previous = { id: string; status: string; formVersion: number; schemaJson: string; answersJson: string };
 
-const MEMBER_COOKIE = "puzzle_admin_session";
+export const MEMBER_COOKIE = "puzzle_admin_session";
 // Round up to avoid accepting an expiry during SQLite's fractional-ms rounding.
-const DB_NOW = "(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 1)";
-const MEMBER_AUTH = `EXISTS (SELECT 1 FROM admin_sessions a JOIN members m ON m.user_id=a.user_id AND m.status='active' WHERE a.token_hash=? AND a.user_id=? AND a.expires_at>${DB_NOW})`;
-const PARTICIPANT_AUTH = `EXISTS (SELECT 1 FROM participant_sessions ps JOIN participant_consent_state cs ON cs.participant_id=ps.participant_id AND cs.status='active' AND cs.epoch=ps.consent_epoch JOIN participant_terms_current t ON t.id=1 AND t.version=cs.terms_version WHERE ps.token_hash=? AND ps.participant_id=? AND ps.expires_at>${DB_NOW})`;
+export const DB_NOW = "(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 1)";
+export const MEMBER_AUTH = `EXISTS (SELECT 1 FROM admin_sessions a JOIN members m ON m.user_id=a.user_id AND m.status='active' WHERE a.token_hash=? AND a.user_id=? AND a.expires_at>${DB_NOW})`;
+export const PARTICIPANT_AUTH = `EXISTS (SELECT 1 FROM participant_sessions ps JOIN participant_consent_state cs ON cs.participant_id=ps.participant_id AND cs.status='active' AND cs.epoch=ps.consent_epoch JOIN participant_terms_current t ON t.id=1 AND t.version=cs.terms_version WHERE ps.token_hash=? AND ps.participant_id=? AND ps.expires_at>${DB_NOW})`;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -103,6 +103,9 @@ export async function submitParticipantRegistration(
     if (!validation.ok) return { ok: false, code: "invalid" };
     const remittanceLast5 = normalizeRemittanceLast5(submission.remittanceLast5);
     if (remittanceLast5 === null) return { ok: false, code: "invalid" };
+    const fee = await db.prepare("SELECT COALESCE((SELECT amount FROM activity_fees WHERE activity_id=(SELECT activity_id FROM registration_forms WHERE id=?)),0) AS amount")
+      .bind(formRow.id).first<{ amount: number }>();
+    if (remittanceMissing(fee?.amount ?? 0, remittanceLast5)) return { ok: false, code: "invalid" };
 
     const id = crypto.randomUUID();
     const timestamp = new Date().toISOString();

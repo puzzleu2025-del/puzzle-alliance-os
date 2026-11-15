@@ -137,7 +137,7 @@ export async function PUT(request: Request) {
       payment_status=CASE WHEN ?=0 AND ?>0 AND payment_status NOT IN ('paid','refunded') THEN 'unpaid' WHEN ?>0 AND ?=0 AND payment_status IN ('unpaid','checking') THEN 'not_required' ELSE payment_status END,
       fee_followup=CASE WHEN ?=0 AND ?>0 AND payment_status NOT IN ('paid','refunded') THEN 1 WHEN ?>0 AND ?=0 AND payment_status IN ('unpaid','checking') THEN 0 ELSE fee_followup END
       WHERE form_id IN (SELECT id FROM registration_forms WHERE activity_id=?)
-      AND NOT EXISTS (SELECT 1 FROM registration_identities i WHERE i.submission_id=registration_submissions.id AND i.status='cancelled') AND ${wrote}`)
+      AND archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM registration_identities i WHERE i.submission_id=registration_submissions.id AND i.status='cancelled') AND ${wrote}`)
       .bind(after,before,after,before,after,before,after,before,after,id,nextVersion,nonce),
   ]);
   const [write] = await env.DB!.batch([stateWrite, audit, ...meetingWrites, ...feeWrites]);
@@ -253,14 +253,12 @@ function changedTaskDeadlineError(before: ReturnType<typeof coreState>, after: R
 }
 const managerRole = (role: string) => role === "admin" || role === "manager";
 const submitted = (activity?: ActivityRow) => !!activity?.settingsSubmittedAt;
-function assignedActivity(activity: ActivityRow | undefined, role: string, userId: string, name: string, uniqueSelfName = false) {
+// Coordinators manage every activity by default. Delegating an activity to a trainee coordinator
+// makes the trainee the executor while the coordinator stays on as assistant (輔助).
+function managedActivity(activity: ActivityRow | undefined, role: string, userId: string) {
   if (!activity) return false;
   if (role === "trainee_coordinator") return activity.traineeCoordinatorId === userId;
-  if (role !== "coordinator") return false;
-  const grants = activity.coordinatorIds;
-  if (Array.isArray(grants) || typeof activity.traineeCoordinatorId === "string") return Array.isArray(grants) && grants.includes(userId);
-  // Old activity rows had no grant fields; their named owner/proxy remains usable.
-  return uniqueSelfName && [activity.owner, activity.proxy].some((value) => String(value ?? "").trim() === name.trim());
+  return role === "coordinator";
 }
 
 async function activityGrantError(before: ReturnType<typeof coreState>, after: ReturnType<typeof coreState>) {
@@ -292,7 +290,7 @@ function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnTyp
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const isManager = managerRole(role);
   if (action === "assign_activity_authority") {
-    if (!isManager) return "只有管理員可以設定活動職權";
+    if (!isManager && role !== "coordinator") return "只有總召以上可以委派見習總召";
     if (!same(before.tasks, after.tasks) || !same(before.meetings, after.meetings) || !same(before.notices, after.notices)) return "活動職權操作不能修改其他資料";
     const previous = before.activities as Record<string, unknown>[];
     const next = after.activities as Record<string, unknown>[];
@@ -300,12 +298,16 @@ function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnTyp
     for (let index = 0; index < previous.length; index++) {
       const original = previous[index], updated = next[index];
       if (Object.keys({ ...original, ...updated }).some((field) => !["coordinatorIds", "traineeCoordinatorId"].includes(field) && !same(original[field], updated[field]))) return "活動職權操作不能修改活動細項";
+      if (isManager) continue;
+      // Coordinators may only delegate, and only activities they manage that are still open for settings.
+      if (!same(original.coordinatorIds, updated.coordinatorIds)) return "總召個資授權只能由管理員變更";
+      if (!same(original.traineeCoordinatorId, updated.traineeCoordinatorId) && (!managedActivity(original as ActivityRow, role, userId) || submitted(original as ActivityRow))) return "只能委派尚未提交設定的活動";
     }
     return "";
   }
   const person = (value: unknown) => uniqueSelfName && String(value ?? "").trim() === name.trim();
   const activityById = new Map((before.activities as Record<string, unknown>[]).map((row) => [row.id, row]));
-  const ownsActivity = (row?: Record<string, unknown>) => assignedActivity(row, role, userId, name, uniqueSelfName);
+  const ownsActivity = (row?: Record<string, unknown>) => managedActivity(row, role, userId);
   const ownsRelatedActivity = (row: Record<string, unknown>) => ownsActivity(activityById.get(row.activityId));
   const managesMeeting = (row: Record<string, unknown>) => row.meetingScope === "organization" ? role === "coordinator" && validInvitedIds(row.invitedMemberIds) && row.invitedMemberIds.includes(userId) : ownsRelatedActivity(row);
   const changedFields = (oldRow: Record<string, unknown>, newRow: Record<string, unknown>) =>
@@ -321,16 +323,16 @@ function stateChangeError(before: ReturnType<typeof coreState>, after: ReturnTyp
     const added = newRows.slice(oldRows.length);
     const createAction = { activities: "create_activity", tasks: "create_task", meetings: "create_meeting" }[key];
     if (added.length && action !== createAction) return "新增資料需使用對應操作";
-    if (key === "activities" && added.some((row) => row.coordinatorIds !== undefined || row.traineeCoordinatorId !== undefined)) return "新活動的職權請在成員管理設定";
+    if (key === "activities" && added.some((row) => row.coordinatorIds !== undefined || row.traineeCoordinatorId !== undefined)) return "新活動請先建立，再委派見習總召";
     if (added.length && !isManager) {
-      if (key === "activities") return "新活動及其總召授權須由管理員建立";
-      if (added.some((row) => !(key === "meetings" && row.meetingScope === "organization" && role === "coordinator") && (!ownsRelatedActivity(row) || submitted(activityById.get(row.activityId))))) return "只能在獲授權且尚未提交設定的活動新增資料";
+      if (key === "activities") { if (role !== "coordinator") return "只有總召以上可以建立活動"; }
+      else if (added.some((row) => !(key === "meetings" && row.meetingScope === "organization" && role === "coordinator") && (!ownsRelatedActivity(row) || submitted(activityById.get(row.activityId))))) return "只能在獲授權且尚未提交設定的活動新增資料";
     }
     for (const row of oldRows) {
       const updated = newById.get(row.id)!;
       const fields = changedFields(row, updated);
       if (!fields.length) continue;
-      if (key === "activities" && fields.some((field) => field === "coordinatorIds" || field === "traineeCoordinatorId")) return "活動職權請在成員管理設定";
+      if (key === "activities" && fields.some((field) => field === "coordinatorIds" || field === "traineeCoordinatorId")) return "見習總召委派與總召個資授權請使用活動職權設定";
       if (action.startsWith("create_")) return "新增操作不能同時修改既有資料";
       if (action === "submit_activity") {
         if (key !== "activities" || fields.length !== 1 || fields[0] !== "settingsSubmittedAt" ||
@@ -404,7 +406,7 @@ function rescheduleError(before: ReturnType<typeof coreState>, after: ReturnType
       const activity = key === "activities" ? oldRow : activityById.get(oldRow.activityId);
       if (!canManageAll) {
         if (submitted(activity)) return "活動設定已提交，改期須由管理員處理";
-        const assigned = key === "meetings" && oldRow.meetingScope === "organization" ? role === "coordinator" && validInvitedIds(oldRow.invitedMemberIds) && oldRow.invitedMemberIds.includes(userId) : assignedActivity(activity, role, userId, name, uniqueSelfName);
+        const assigned = key === "meetings" && oldRow.meetingScope === "organization" ? role === "coordinator" && validInvitedIds(oldRow.invitedMemberIds) && oldRow.invitedMemberIds.includes(userId) : managedActivity(activity, role, userId);
         if (!assigned && (key !== "tasks" || !uniqueSelfName || String(oldRow[owner] ?? "").trim() !== name.trim())) return "只能調整自己的任務或獲授權活動的日期";
       }
       const unchanged = Object.keys({ ...oldRow, ...newRow }).filter((field) => !allowed.includes(field)).every((field) => same(oldRow[field], newRow[field]));

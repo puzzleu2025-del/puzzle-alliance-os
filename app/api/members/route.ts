@@ -35,6 +35,7 @@ const coordinatorDirectorySql = `WITH source AS (
   FROM registration_identities i JOIN registration_forms f ON f.id=i.form_id
   JOIN activity a ON json_extract(a.data, '$.id')=f.activity_id
   WHERE i.status='active' AND i.member_id IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM registration_submissions x WHERE x.id=i.submission_id AND x.archived_at IS NOT NULL)
     AND json_type(a.data, '$.id')='text' AND length(json_extract(a.data, '$.id')) > 0
     AND (SELECT count(*) FROM activity x WHERE json_extract(x.data, '$.id')=f.activity_id)=1
     AND (json_type(a.data, '$.traineeCoordinatorId') IS NULL OR json_type(a.data, '$.traineeCoordinatorId')='text')

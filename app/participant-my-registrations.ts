@@ -36,7 +36,7 @@ export async function listMyRegistrations(
       `WITH owner AS (${auth}), page AS (
         SELECT s.id AS submissionId,f.title AS title,s.submitted_at AS submittedAt,COALESCE((SELECT amount FROM activity_fees WHERE activity_id=f.activity_id),0) AS feeAmount,s.remittance_last5 AS remittanceLast5
         FROM owner JOIN registration_identities i ON i.${ownerColumn}=owner.id AND i.status='active'
-        JOIN registration_submissions s ON s.id=i.submission_id AND s.form_id=i.form_id
+        JOIN registration_submissions s ON s.id=i.submission_id AND s.form_id=i.form_id AND s.archived_at IS NULL
         JOIN registration_forms f ON f.id=i.form_id
         WHERE (? IS NULL OR s.submitted_at<? OR (s.submitted_at=? AND s.id<?))
         ORDER BY s.submitted_at DESC,s.id DESC LIMIT ?

@@ -137,7 +137,7 @@ export async function PUT(request: Request) {
       payment_status=CASE WHEN ?=0 AND ?>0 AND payment_status NOT IN ('paid','refunded') THEN 'unpaid' WHEN ?>0 AND ?=0 AND payment_status IN ('unpaid','checking') THEN 'not_required' ELSE payment_status END,
       fee_followup=CASE WHEN ?=0 AND ?>0 AND payment_status NOT IN ('paid','refunded') THEN 1 WHEN ?>0 AND ?=0 AND payment_status IN ('unpaid','checking') THEN 0 ELSE fee_followup END
       WHERE form_id IN (SELECT id FROM registration_forms WHERE activity_id=?)
-      AND NOT EXISTS (SELECT 1 FROM registration_identities i WHERE i.submission_id=registration_submissions.id AND i.status='cancelled') AND ${wrote}`)
+      AND archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM registration_identities i WHERE i.submission_id=registration_submissions.id AND i.status='cancelled') AND ${wrote}`)
       .bind(after,before,after,before,after,before,after,before,after,id,nextVersion,nonce),
   ]);
   const [write] = await env.DB!.batch([stateWrite, audit, ...meetingWrites, ...feeWrites]);

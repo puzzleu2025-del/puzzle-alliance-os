@@ -38,13 +38,13 @@ export async function fillOwnRemittance(
     const row = await db.prepare(
       `SELECT s.remittance_last5 AS remittanceLast5,COALESCE((SELECT amount FROM activity_fees WHERE activity_id=(SELECT activity_id FROM registration_forms WHERE id=s.form_id)),0) AS feeAmount
        FROM registration_submissions s JOIN registration_identities i ON i.submission_id=s.id AND i.form_id=s.form_id
-       WHERE s.id=? AND i.status='active' AND i.${ownerColumn}=?`,
+       WHERE s.id=? AND s.archived_at IS NULL AND i.status='active' AND i.${ownerColumn}=?`,
     ).bind(submissionId, owner.id).first<{ remittanceLast5: string; feeAmount: number }>();
     if (!row) return { ok: false, code: "not_found" };
     if (!(row.feeAmount > 0)) return { ok: false, code: "not_required" };
     if (row.remittanceLast5 !== "") return { ok: false, code: "already_set" };
     const write = await db.prepare(
-      `UPDATE registration_submissions SET remittance_last5=? WHERE id=? AND remittance_last5=''
+      `UPDATE registration_submissions SET remittance_last5=? WHERE id=? AND remittance_last5='' AND archived_at IS NULL
        AND EXISTS (SELECT 1 FROM registration_identities i WHERE i.submission_id=registration_submissions.id AND i.form_id=registration_submissions.form_id AND i.status='active' AND i.${ownerColumn}=?)
        AND ${auth}`,
     ).bind(remittanceLast5, submissionId, owner.id, tokenHash, owner.id).run();

@@ -71,6 +71,7 @@ export type RegistrationSubmission = {
   remittanceLast5?: string;
   feeFollowup?: boolean;
   feeRecheckReason?: "price_change" | "refund" | "";
+  archivedAt?: string;
   reminderFiveDaysSentAt?: string;
   reminderOneDaySentAt?: string;
   submittedAt: string;

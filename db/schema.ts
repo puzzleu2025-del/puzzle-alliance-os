@@ -81,6 +81,7 @@ export const registrationSubmissions = sqliteTable("registration_submissions", {
   feeFollowup: integer("fee_followup", { mode: "boolean" }).notNull().default(false),
   feeRecheckReason: text("fee_recheck_reason").notNull().default(""),
   reconciliationNonce: text("reconciliation_nonce"),
+  archivedAt: text("archived_at"),
   reminderFiveDaysSentAt: text("reminder_5d_sent_at"),
   reminderOneDaySentAt: text("reminder_1d_sent_at"),
   idempotencyHash: text("idempotency_hash").notNull(),
@@ -90,6 +91,17 @@ export const registrationSubmissions = sqliteTable("registration_submissions", {
   index("registration_submissions_form_idx").on(table.formId),
   uniqueIndex("registration_submissions_idempotency_unique").on(table.formId, table.idempotencyHash),
   uniqueIndex("registration_submissions_id_form_unique").on(table.id, table.formId),
+]);
+
+// Single-row setting, changeable only by a system administrator.
+export const dataRetentionSettings = sqliteTable("data_retention_settings", {
+  id: integer("id").primaryKey(),
+  retentionYears: integer("retention_years").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  updatedBy: text("updated_by").notNull(),
+}, (table) => [
+  check("data_retention_settings_singleton", sql`${table.id} = 1`),
+  check("data_retention_settings_years_valid", sql`${table.retentionYears} BETWEEN 1 AND 10`),
 ]);
 
 export const participants = sqliteTable("participants", {

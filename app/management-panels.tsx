@@ -29,6 +29,7 @@ export type Activity = {
   teams?: string[];
   progress?: number;
   budget?: number | string;
+  feeAmount?: number;
   type?: string;
   size?: string;
   targetAttendance?: number;
@@ -419,6 +420,7 @@ function ActivityFields({ activity, userName, members, disabled }: { activity?: 
     <label>活動規模<input name="size" maxLength={100} defaultValue={activity?.size} placeholder="例：中型、50 人" /></label>
     <label>目標人數<input name="targetAttendance" type="number" min="0" step="1" inputMode="numeric" defaultValue={activity?.targetAttendance} /></label>
     <label>預算<input name="budget" type="number" min="0" step="1" inputMode="numeric" defaultValue={activity?.budget} /></label>
+    <label>報名費（新台幣整元，0 為免費）<input name="feeAmount" type="number" min="0" max="9007199254740991" step="1" inputMode="numeric" defaultValue={activity?.feeAmount ?? 0} required /></label>
     <label>活動主責<MemberSelect name="owner" members={members} defaultValue={activity?.owner || userName} required /></label>
     <label>職務代理<MemberSelect name="proxy" members={members} defaultValue={activity?.proxy} /></label>
     <label className="mgmt-span-2">場地<input name="location" maxLength={200} defaultValue={activity?.location} /></label>
@@ -469,6 +471,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
       location: field(form, "location"),
       teams: commaList(field(form, "teams")),
       budget: field(form, "budget"),
+      feeAmount: Number(field(form, "feeAmount")),
       type: field(form, "type"),
       size: field(form, "size"),
       targetAttendance: Number(field(form, "targetAttendance")) || undefined,

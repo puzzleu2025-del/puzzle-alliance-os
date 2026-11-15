@@ -71,6 +71,15 @@ export async function PUT(request: Request) {
     const notice = nextState.notices[0] as Record<string, unknown> | undefined;
     if (notice) { notice.title = "排程異動"; notice.detail = "有一項排程已更新。"; }
   }
+  const oldActivities = new Map((previousState.activities as ActivityRow[]).map((activity) => [activity.id, activity]));
+  const feeChanges = (nextState.activities as ActivityRow[]).flatMap((activity) => {
+    const previous = oldActivities.get(activity.id);
+    const before = previous?.feeAmount === undefined ? 0 : previous.feeAmount;
+    const after = activity.feeAmount === undefined ? 0 : activity.feeAmount;
+    return before === after ? [] : [{ id: activity.id as string, before: before as number, after: after as number }];
+  });
+  if (feeChanges.length && !managerRole(auth.user!.role) && auth.user!.role !== "coordinator")
+    return Response.json({ error: "只有管理員或獲授權的總召可設定報名費" }, { status: 403, headers: noStore });
   const matchingNames = !managerRole(auth.user!.role)
     ? await env.DB!.prepare("SELECT user_id FROM members WHERE status='active' AND display_name=?").bind(auth.user!.displayName).all<{ user_id: string }>()
     : null;
@@ -121,7 +130,17 @@ export async function PUT(request: Request) {
   const meetingWrites = changedMeetings.length ? [
     env.DB!.prepare(`INSERT INTO meetings (id,activity_id,position,data) SELECT json_extract(value,'$.id'),json_extract(value,'$.activityId'),json_extract(value,'$.position'),json_extract(value,'$.data') FROM json_each(?) WHERE ${wrote} ON CONFLICT(id) DO UPDATE SET activity_id=excluded.activity_id,position=excluded.position,data=excluded.data`).bind(JSON.stringify(changedMeetings), nextVersion, nonce),
   ] : [];
-  const [write] = await env.DB!.batch([stateWrite, audit, ...meetingWrites]);
+  const feeWrites = feeChanges.flatMap(({ id, before, after }) => [
+    env.DB!.prepare(`INSERT INTO activity_fees (activity_id,amount,revision) SELECT ?,?,1 WHERE ${wrote} ON CONFLICT(activity_id) DO UPDATE SET amount=excluded.amount,revision=activity_fees.revision+1`).bind(id, after, nextVersion, nonce),
+    env.DB!.prepare(`UPDATE registration_submissions SET
+      fee_recheck_reason=CASE WHEN payment_status='paid' THEN CASE WHEN ?=0 THEN 'refund' ELSE 'price_change' END ELSE fee_recheck_reason END,
+      payment_status=CASE WHEN ?=0 AND ?>0 AND payment_status NOT IN ('paid','refunded') THEN 'unpaid' WHEN ?>0 AND ?=0 AND payment_status IN ('unpaid','checking') THEN 'not_required' ELSE payment_status END,
+      fee_followup=CASE WHEN ?=0 AND ?>0 AND payment_status NOT IN ('paid','refunded') THEN 1 WHEN ?>0 AND ?=0 AND payment_status IN ('unpaid','checking') THEN 0 ELSE fee_followup END
+      WHERE form_id IN (SELECT id FROM registration_forms WHERE activity_id=?)
+      AND NOT EXISTS (SELECT 1 FROM registration_identities i WHERE i.submission_id=registration_submissions.id AND i.status='cancelled') AND ${wrote}`)
+      .bind(after,before,after,before,after,before,after,before,after,id,nextVersion,nonce),
+  ]);
+  const [write] = await env.DB!.batch([stateWrite, audit, ...meetingWrites, ...feeWrites]);
   const receipt = () => Response.json({ saved: true, requiresReauthentication: true, version: nextVersion, updatedAt: now }, { headers: noStore });
   let latest: Awaited<ReturnType<typeof readWorkspace>>;
   try { latest = await readWorkspace(auth.tokenHash!, auth.user!.userId); }
@@ -421,6 +440,7 @@ function validState(value: unknown): value is {activities:unknown[];tasks:unknow
         /^P[1-9]$/.test(phase) && object(plan) && optionalStrings(plan,["startDate","due","notes","owner","proxy"])
         && (plan.progress === undefined || (typeof plan.progress === "number" && Number.isFinite(plan.progress) && plan.progress >= 0 && plan.progress <= 100)))))
       && (x.targetAttendance === undefined || (typeof x.targetAttendance === "number" && Number.isFinite(x.targetAttendance) && x.targetAttendance >= 0))
+      && (x.feeAmount === undefined || (typeof x.feeAmount === "number" && Number.isSafeInteger(x.feeAmount) && x.feeAmount >= 0))
       && (x.budget === undefined || typeof x.budget === "number" || typeof x.budget === "string"))
     && row.tasks.every(x => strings(x,["id","name","activityId","assignee","due","status","blocker"])
       && optionalStrings(x,["proxy","jobRole","nextOwner","startDate","priority","phaseId","acceptanceCriteria"])

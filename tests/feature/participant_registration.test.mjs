@@ -53,7 +53,7 @@ function fixture() {
   const path = join(dir, "local.sqlite");
   const sqlite = new DatabaseSync(path);
   sqlite.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000");
-  for (const file of readdirSync("drizzle").filter((name) => /^00(?:0[0-9]|10).*[.]sql$/.test(name)).sort()) {
+  for (const file of readdirSync("drizzle").filter((name) => /^[0-9]{4}_.*[.]sql$/.test(name)).sort()) {
     sqlite.exec(readFileSync("drizzle/" + file, "utf8"));
   }
   for (const [id, username] of [["m1", "member1"], ["m2", "member2"]]) {

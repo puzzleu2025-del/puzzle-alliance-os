@@ -68,6 +68,8 @@ export type RegistrationSubmission = {
   status: RegistrationSubmissionStatus;
   paymentStatus?: RegistrationPaymentStatus;
   paymentNote?: string;
+  feeFollowup?: boolean;
+  feeRecheckReason?: "price_change" | "refund" | "";
   reminderFiveDaysSentAt?: string;
   reminderOneDaySentAt?: string;
   submittedAt: string;

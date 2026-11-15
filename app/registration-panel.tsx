@@ -22,7 +22,7 @@ const mask = (value: string) => value ? `${value.slice(0, 1)}${"•".repeat(Math
 const paymentLabels: Record<RegistrationPaymentStatus, string> = { unpaid:"未對帳", checking:"待確認", paid:"已對帳", refunded:"已退款", not_required:"無需付款" };
 
 export default function RegistrationPanel({ data, userId, userName, userRole, memberOptions = [], busy, onSave, preview, initialActivityId }: ManagementPanelProps & { preview: boolean; initialActivityId?: string }) {
-  const accessibleActivities = data.activities.filter((row) => ["admin", "manager"].includes(userRole ?? "") || (row.coordinatorIds || row.traineeCoordinatorId ? Boolean(userId && (row.coordinatorIds?.includes(userId) || row.traineeCoordinatorId === userId)) : userRole === "coordinator" && [row.owner, row.proxy].some((person) => person?.trim() === userName.trim())));
+  const accessibleActivities = data.activities.filter((row) => ["admin", "manager", "coordinator"].includes(userRole ?? "") || (userRole === "trainee_coordinator" && row.traineeCoordinatorId === userId));
   const [activityId, setActivityId] = useState(initialActivityId ?? accessibleActivities[0]?.id ?? "");
   const [remoteForms, setRemoteForms] = useState<RegistrationForm[]>([]);
   const [remoteSubmissions, setRemoteSubmissions] = useState<RegistrationSubmission[]>([]);
@@ -32,7 +32,7 @@ export default function RegistrationPanel({ data, userId, userName, userRole, me
   const forms = preview ? (data.registrationForms ?? []) : remoteForms;
   const submissions = preview ? (data.registrationSubmissions ?? []) : remoteSubmissions;
   const activity = data.activities.find((row) => row.id === activityId);
-  const canEditForm = canConfigureActivity(activity, userId, userName, userRole);
+  const canEditForm = canConfigureActivity(activity, userId, userRole);
   const canSeePrivate = ["admin", "manager", "coordinator"].includes(userRole ?? "");
   const activityForms = forms.filter((form) => form.activityId === activityId);
   const [selectedId, setSelectedId] = useState("");

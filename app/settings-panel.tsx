@@ -3,16 +3,17 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { previewPasswordHash, previewPasswordMatches } from "../preview/preview-password";
+import { SITE_CONTENT_LIMITS, type SiteContent } from "./site-content";
 
 export type Audit = { id: string | number; actor: string; action: string; createdAt: string };
-const actions: Record<string,string> = {create_activity:"建立活動",create_task:"建立任務",create_meeting:"安排會議",complete_task:"完成任務",reschedule:"調整排程",confirm_meeting:"確認會議",update_meeting_attendance:"更新出席回覆",read_notice:"確認重要通知",create_registration_form:"建立報名表",update_registration_form:"更新報名表",create_registration_submission:"提交報名資料",update_registration_reconciliation:"更新報名對帳",export_registration_responses:"匯出報名名單",create_member:"新增成員",update_member:"更新成員",update_profile:"更新個人資料",reset_member_password:"重設成員密碼"};
+const actions: Record<string,string> = {create_activity:"建立活動",create_task:"建立任務",create_meeting:"安排會議",complete_task:"完成任務",reschedule:"調整排程",confirm_meeting:"確認會議",update_meeting_attendance:"更新出席回覆",read_notice:"確認重要通知",create_registration_form:"建立報名表",update_registration_form:"更新報名表",create_registration_submission:"提交報名資料",update_registration_reconciliation:"更新報名對帳",export_registration_responses:"匯出報名名單",create_member:"新增成員",update_member:"更新成員",update_profile:"更新個人資料",reset_member_password:"重設成員密碼",update_site_content:"更新前台內容"};
 
 export default function SettingsPanel({preview,version,sync,audit,refresh,onLogout}:{preview:boolean;version:number;sync:string;audit:Audit[];refresh:()=>void;onLogout?:()=>void}) {
   const [matrix,setMatrix]=useState(false);
   return <><div className="page-heading"><div><h2>系統設定</h2><p className="muted">帳號安全、同步機制、角色權限與稽核紀錄</p></div></div><div className="settings-grid">
     <AccountCard preview={preview} onLogout={onLogout}/>
     <RetentionCard preview={preview}/>
-    <AnnouncementsCard preview={preview}/>
+    <AnnouncementsCard preview={preview}/><SiteContentCard preview={preview}/>
     <article className="card"><h3>同步機制</h3><p>{preview?"GitHub Pages 互動版會把資料保存在這個瀏覽器。":"共用資料庫每 45 秒或返回視窗時更新。"}</p><p>{sync} · 資料版本 {version}</p>{!preview&&<button onClick={refresh}>立即同步</button>}</article>
     <article className="card"><h3>角色與權限設定</h3><p>成員角色由系統管理員在「成員管理」調整。</p><button aria-expanded={matrix} onClick={()=>setMatrix(!matrix)}>{matrix?"收合權限矩陣":"查看權限矩陣"}</button></article>
     <article className="card"><h3>稽核紀錄</h3><p>查看誰在什麼時間執行了哪些操作。</p><small>{preview?"以下只記錄目前瀏覽器的操作。":"顯示最近 50 筆已儲存操作。"}</small><div className="audit-list">{audit.length?audit.map(a=><div className="row" key={a.id}><div><b>{actions[a.action]||a.action}</b><small>{a.actor}</small><small>{new Date(a.createdAt).toLocaleString("zh-TW",{timeZone:"Asia/Taipei"})}</small></div></div>):<p>尚無操作紀錄</p>}</div></article>
@@ -215,4 +216,115 @@ function AnnouncementsCard({preview}:{preview:boolean}) {
     {items.length===0?<p className="muted">尚無消息。</p>:<ul className="audit-list">{items.map(item=><li key={item.id}><b>{item.title}</b> <small>{item.published?"已發布":"未發布"}</small><div><button disabled={busy} type="button" onClick={()=>void togglePublish(item)}>{item.published?"取消發布":"發布"}</button> <button disabled={busy} type="button" onClick={()=>void remove(item)}>刪除</button></div></li>)}</ul>}
     <p role="status">{message}</p>
   </article>;
+}
+
+type SiteContentField<T> = { key: keyof T & string; label: string; max: number; multiline?: boolean };
+
+// 前台內容 editor for managers. The manage read answers 403 to everyone else, so the card stays hidden.
+function SiteContentCard({preview}:{preview:boolean}) {
+  const [draft,setDraft]=useState<SiteContent|null>(null);
+  const [emphasis,setEmphasis]=useState("");
+  const [busy,setBusy]=useState(false),[message,setMessage]=useState("");
+  useEffect(()=>{
+    if(preview)return;
+    let alive=true;
+    fetch("/api/site/content?scope=manage",{cache:"no-store"}).then(async response=>{
+      if(!alive||!response.ok)return;
+      const data=await response.json() as {content:SiteContent};
+      if(alive){setDraft(data.content);setEmphasis(data.content.hero.emphasis.join("、"));}
+    }).catch(()=>undefined);
+    return()=>{alive=false;};
+  },[preview]);
+  if(preview||draft===null)return null;
+  const L=SITE_CONTENT_LIMITS;
+  const patch=(change:(current:SiteContent)=>SiteContent)=>setDraft(current=>current?change(current):current);
+
+  const save=async(event:FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();if(busy)return;
+    const content:SiteContent={...draft,hero:{...draft.hero,emphasis:emphasis.split(/[,，、]/).map(word=>word.trim()).filter(Boolean)}};
+    setBusy(true);setMessage("");
+    try{
+      const response=await fetch("/api/site/content",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(content)});
+      const result=await response.json().catch(()=>({})) as {error?:string;fields?:string[]};
+      if(!response.ok)throw new Error(result.fields?.length?`${result.error}：${result.fields.join("、")}`:result.error||"前台內容未儲存");
+      setEmphasis(content.hero.emphasis.join("、"));
+      setMessage("前台內容已儲存。");
+    }catch(error){setMessage(error instanceof Error?error.message:"無法連線");}finally{setBusy(false);}
+  };
+
+  return <article className="card site-content-card"><h3>前台內容</h3>
+    <p>修改前台首頁的標題、說明、入口、優勢、問答與區段標題。欄位不可空白，超過字數會無法儲存。</p>
+    <form className="account-form" onSubmit={save}>
+      <details><summary>首頁標題與說明</summary>
+        <SiteField id="sc-tagline" label="頂部標語" value={draft.tagline} max={L.tagline} onChange={value=>patch(d=>({...d,tagline:value}))}/>
+        <SiteField id="sc-hero-line1" label="標題第一行" value={draft.hero.line1} max={L.heroLine} onChange={value=>patch(d=>({...d,hero:{...d.hero,line1:value}}))}/>
+        <SiteField id="sc-hero-line2" label="標題第二行" value={draft.hero.line2} max={L.heroLine} onChange={value=>patch(d=>({...d,hero:{...d.hero,line2:value}}))}/>
+        <label htmlFor="sc-hero-emphasis">標題中要標紫色的字（以頓號分隔，最多 {L.heroEmphasis.count} 個）</label>
+        <input id="sc-hero-emphasis" value={emphasis} onChange={event=>setEmphasis(event.target.value)}/>
+        <SiteField id="sc-hero-sub" label="說明文字" value={draft.hero.subtitle} max={L.heroSubtitle} multiline onChange={value=>patch(d=>({...d,hero:{...d.hero,subtitle:value}}))}/>
+        <SiteField id="sc-hero-location" label="活動地區" value={draft.hero.location} max={L.heroLocation} onChange={value=>patch(d=>({...d,hero:{...d.hero,location:value}}))}/>
+        <SiteField id="sc-hero-note" label="地區旁的提示" value={draft.hero.locationNote} max={L.heroLocationNote} onChange={value=>patch(d=>({...d,hero:{...d.hero,locationNote:value}}))}/>
+      </details>
+      <details><summary>快速入口（最多 {L.quickEntries.count} 個）</summary>
+        <RowsEditor name="quick" rows={draft.quickEntries} max={L.quickEntries.count} empty={{title:"",text:""}}
+          fields={[{key:"title",label:"標題",max:L.quickEntries.title},{key:"text",label:"說明",max:L.quickEntries.text}]}
+          onChange={rows=>patch(d=>({...d,quickEntries:rows}))}/>
+      </details>
+      <details><summary>會員優勢（最多 {L.benefits.count} 個）</summary>
+        <RowsEditor name="benefit" rows={draft.benefits} max={L.benefits.count} empty={{title:"",text:""}}
+          fields={[{key:"title",label:"標題",max:L.benefits.title},{key:"text",label:"說明",max:L.benefits.text}]}
+          onChange={rows=>patch(d=>({...d,benefits:rows}))}/>
+      </details>
+      <details><summary>常見問題（最多 {L.faqs.count} 題）</summary>
+        <RowsEditor name="faq" rows={draft.faqs} max={L.faqs.count} empty={{question:"",answer:""}}
+          fields={[{key:"question",label:"問題",max:L.faqs.question},{key:"answer",label:"回答",max:L.faqs.answer,multiline:true}]}
+          onChange={rows=>patch(d=>({...d,faqs:rows}))}/>
+      </details>
+      <details><summary>底部橫幅</summary>
+        <SiteField id="sc-banner-title" label="標題" value={draft.bottomBanner.title} max={L.bannerTitle} onChange={value=>patch(d=>({...d,bottomBanner:{...d.bottomBanner,title:value}}))}/>
+        <SiteField id="sc-banner-text" label="內容" value={draft.bottomBanner.text} max={L.bannerText} multiline onChange={value=>patch(d=>({...d,bottomBanner:{...d.bottomBanner,text:value}}))}/>
+        <SiteField id="sc-badge-title" label="提示卡標題" value={draft.bottomBanner.badgeTitle} max={L.bannerBadgeTitle} onChange={value=>patch(d=>({...d,bottomBanner:{...d.bottomBanner,badgeTitle:value}}))}/>
+        <SiteField id="sc-badge-text" label="提示卡內容" value={draft.bottomBanner.badgeText} max={L.bannerBadgeText} multiline onChange={value=>patch(d=>({...d,bottomBanner:{...d.bottomBanner,badgeText:value}}))}/>
+      </details>
+      <details><summary>區段標題與頁尾</summary>
+        <SiteField id="sc-act-title" label="近期活動標題" value={draft.sections.activities.title} max={L.sectionTitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,activities:{...d.sections.activities,title:value}}}))}/>
+        <SiteField id="sc-act-sub" label="近期活動說明" value={draft.sections.activities.subtitle} max={L.sectionSubtitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,activities:{...d.sections.activities,subtitle:value}}}))}/>
+        <SiteField id="sc-act-more" label="查看更多連結文字" value={draft.sections.activities.more} max={L.sectionMore} onChange={value=>patch(d=>({...d,sections:{...d.sections,activities:{...d.sections.activities,more:value}}}))}/>
+        <SiteField id="sc-ben-title" label="會員優勢標題" value={draft.sections.benefits.title} max={L.sectionTitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,benefits:{title:value}}}))}/>
+        <SiteField id="sc-faq-title" label="常見問題標題" value={draft.sections.faq.title} max={L.sectionTitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,faq:{...d.sections.faq,title:value}}}))}/>
+        <SiteField id="sc-faq-more" label="完整問答連結文字" value={draft.sections.faq.more} max={L.sectionMore} onChange={value=>patch(d=>({...d,sections:{...d.sections,faq:{...d.sections.faq,more:value}}}))}/>
+        <SiteField id="sc-news-title" label="消息標題" value={draft.sections.news.title} max={L.sectionTitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,news:{...d.sections.news,title:value}}}))}/>
+        <SiteField id="sc-news-sub" label="消息說明" value={draft.sections.news.subtitle} max={L.sectionSubtitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,news:{...d.sections.news,subtitle:value}}}))}/>
+        <SiteField id="sc-cal-title" label="行事曆標題" value={draft.sections.calendar.title} max={L.sectionTitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,calendar:{...d.sections.calendar,title:value}}}))}/>
+        <SiteField id="sc-cal-sub" label="行事曆說明" value={draft.sections.calendar.subtitle} max={L.sectionSubtitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,calendar:{...d.sections.calendar,subtitle:value}}}))}/>
+        <SiteField id="sc-reg-title" label="線上報名標題" value={draft.sections.register.title} max={L.sectionTitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,register:{...d.sections.register,title:value}}}))}/>
+        <SiteField id="sc-reg-sub" label="線上報名說明" value={draft.sections.register.subtitle} max={L.sectionSubtitle} onChange={value=>patch(d=>({...d,sections:{...d.sections,register:{...d.sections.register,subtitle:value}}}))}/>
+        <SiteField id="sc-footer" label="頁尾說明" value={draft.footer.text} max={L.footer} onChange={value=>patch(d=>({...d,footer:{text:value}}))}/>
+      </details>
+      <button disabled={busy} type="submit">{busy?"儲存中…":"儲存前台內容"}</button>
+    </form>
+    <p role="status">{message}</p>
+  </article>;
+}
+
+function SiteField({id,label,value,max,multiline,onChange}:{id:string;label:string;value:string;max:number;multiline?:boolean;onChange:(value:string)=>void}) {
+  return <>
+    <label htmlFor={id}>{label}</label>
+    {multiline
+      ? <textarea id={id} value={value} maxLength={max} rows={3} required onChange={event=>onChange(event.target.value)}/>
+      : <input id={id} value={value} maxLength={max} required onChange={event=>onChange(event.target.value)}/>}
+  </>;
+}
+
+// Add/remove rows for the list copy (quick entries, benefits, FAQ). Limits follow SITE_CONTENT_LIMITS.
+function RowsEditor<T extends Record<string,string>>({name,rows,max,fields,empty,onChange}:{name:string;rows:T[];max:number;fields:Array<SiteContentField<T>>;empty:T;onChange:(rows:T[])=>void}) {
+  return <div className="site-content-rows">
+    {rows.map((row,index)=><div className="site-content-row" key={index}>
+      <p className="muted">第 {index+1} 項</p>
+      {fields.map(field=><SiteField key={field.key} id={`sc-${name}-${index}-${field.key}`} label={field.label} value={row[field.key]} max={field.max} multiline={field.multiline}
+        onChange={value=>onChange(rows.map((item,position)=>position===index?{...item,[field.key]:value} as T:item))}/>)}
+      <button type="button" onClick={()=>onChange(rows.filter((_,position)=>position!==index))}>移除此項</button>
+    </div>)}
+    <button type="button" disabled={rows.length>=max} onClick={()=>onChange([...rows,{...empty}])}>新增一項</button>
+  </div>;
 }

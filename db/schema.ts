@@ -108,6 +108,17 @@ export const siteAnnouncements = sqliteTable("site_announcements", {
   index("site_announcements_published_idx").on(table.published, table.updatedAt),
 ]);
 
+// Public site copy (前台內容). One JSON row; the reader merges it onto code defaults.
+export const siteContent = sqliteTable("site_content", {
+  id: integer("id").primaryKey(),
+  content: text("content").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  updatedBy: text("updated_by").notNull(),
+}, (table) => [
+  check("site_content_singleton", sql`${table.id} = 1`),
+  check("site_content_json_valid", sql`json_valid(${table.content})`),
+]);
+
 // Single-row setting, changeable only by a system administrator.
 export const dataRetentionSettings = sqliteTable("data_retention_settings", {
   id: integer("id").primaryKey(),

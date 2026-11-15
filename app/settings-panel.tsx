@@ -12,6 +12,7 @@ export default function SettingsPanel({preview,version,sync,audit,refresh,onLogo
   return <><div className="page-heading"><div><h2>系統設定</h2><p className="muted">帳號安全、同步機制、角色權限與稽核紀錄</p></div></div><div className="settings-grid">
     <AccountCard preview={preview} onLogout={onLogout}/>
     <RetentionCard preview={preview}/>
+    <AnnouncementsCard preview={preview}/>
     <article className="card"><h3>同步機制</h3><p>{preview?"GitHub Pages 互動版會把資料保存在這個瀏覽器。":"共用資料庫每 45 秒或返回視窗時更新。"}</p><p>{sync} · 資料版本 {version}</p>{!preview&&<button onClick={refresh}>立即同步</button>}</article>
     <article className="card"><h3>角色與權限設定</h3><p>成員角色由系統管理員在「成員管理」調整。</p><button aria-expanded={matrix} onClick={()=>setMatrix(!matrix)}>{matrix?"收合權限矩陣":"查看權限矩陣"}</button></article>
     <article className="card"><h3>稽核紀錄</h3><p>查看誰在什麼時間執行了哪些操作。</p><small>{preview?"以下只記錄目前瀏覽器的操作。":"顯示最近 50 筆已儲存操作。"}</small><div className="audit-list">{audit.length?audit.map(a=><div className="row" key={a.id}><div><b>{actions[a.action]||a.action}</b><small>{a.actor}</small><small>{new Date(a.createdAt).toLocaleString("zh-TW",{timeZone:"Asia/Taipei"})}</small></div></div>):<p>尚無操作紀錄</p>}</div></article>
@@ -145,6 +146,73 @@ function RetentionCard({preview}:{preview:boolean}) {
     <p>待封存 {status.dueCount} 筆 · 已封存 {status.archivedCount} 筆 · 無活動日期待確認 {status.heldWithoutActivity} 筆</p>
     <form className="account-form" onSubmit={saveYears}><label htmlFor="retention-years">保存年限（{status.minYears}–{status.maxYears} 年）</label><input id="retention-years" type="number" min={status.minYears} max={status.maxYears} step={1} value={years} onChange={(event)=>setYears(event.target.value)} required/><button disabled={busy} type="submit">儲存年限</button></form>
     <button disabled={busy||status.dueCount===0} type="button" onClick={()=>void archiveDue()}>檢查並封存到期資料</button>
+    <p role="status">{message}</p>
+  </article>;
+}
+
+type SiteAnnouncement = {id:string;title:string;body:string;published:boolean;updatedAt:string};
+
+// 消息 editor for managers. The public site shows only published items; the API returns 403 to everyone else.
+function AnnouncementsCard({preview}:{preview:boolean}) {
+  const [items,setItems]=useState<SiteAnnouncement[]|null>(null);
+  const [title,setTitle]=useState(""),[body,setBody]=useState(""),[publish,setPublish]=useState(false);
+  const [busy,setBusy]=useState(false),[message,setMessage]=useState("");
+  const load=async()=>{
+    const response=await fetch("/api/site/announcements",{cache:"no-store"});
+    if(!response.ok){setItems(null);return;}
+    const data=await response.json() as {announcements:SiteAnnouncement[]};
+    setItems(data.announcements);
+  };
+  useEffect(()=>{
+    if(preview)return;
+    let alive=true;
+    fetch("/api/site/announcements",{cache:"no-store"}).then(async response=>{
+      if(!alive||!response.ok)return;
+      const data=await response.json() as {announcements:SiteAnnouncement[]};
+      if(alive)setItems(data.announcements);
+    }).catch(()=>undefined);
+    return()=>{alive=false;};
+  },[preview]);
+  if(preview||items===null)return null;
+
+  const send=async(method:string,payload:Record<string,unknown>)=>{
+    const response=await fetch("/api/site/announcements",{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    const result=await response.json().catch(()=>({})) as {error?:string};
+    if(!response.ok)throw new Error(result.error||"消息未儲存");
+    await load();
+  };
+
+  const create=async(event:FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();if(busy)return;
+    setBusy(true);setMessage("");
+    try{await send("POST",{title:title.trim(),body:body.trim(),published:publish});setTitle("");setBody("");setPublish(false);setMessage("消息已儲存。");}
+    catch(error){setMessage(error instanceof Error?error.message:"無法連線");}finally{setBusy(false);}
+  };
+
+  const togglePublish=async(item:SiteAnnouncement)=>{
+    if(busy)return;setBusy(true);setMessage("");
+    try{await send("PUT",{id:item.id,title:item.title,body:item.body,published:!item.published});}
+    catch(error){setMessage(error instanceof Error?error.message:"無法連線");}finally{setBusy(false);}
+  };
+
+  const remove=async(item:SiteAnnouncement)=>{
+    if(busy||!window.confirm(`確定刪除消息「${item.title}」？刪除後無法復原。`))return;
+    setBusy(true);setMessage("");
+    try{await send("DELETE",{id:item.id});setMessage("消息已刪除。");}
+    catch(error){setMessage(error instanceof Error?error.message:"無法連線");}finally{setBusy(false);}
+  };
+
+  return <article className="card"><h3>前台消息</h3>
+    <p>發布後會出現在對外網站的消息區。未發布的消息只有後台可見。</p>
+    <form className="account-form" onSubmit={create}>
+      <label htmlFor="announcement-title">標題</label>
+      <input id="announcement-title" value={title} maxLength={120} onChange={(event)=>setTitle(event.target.value)} required/>
+      <label htmlFor="announcement-body">內容</label>
+      <textarea id="announcement-body" value={body} maxLength={4000} rows={4} onChange={(event)=>setBody(event.target.value)} required/>
+      <label><input type="checkbox" checked={publish} onChange={(event)=>setPublish(event.target.checked)}/> 立即發布到前台</label>
+      <button disabled={busy} type="submit">新增消息</button>
+    </form>
+    {items.length===0?<p className="muted">尚無消息。</p>:<ul className="audit-list">{items.map(item=><li key={item.id}><b>{item.title}</b> <small>{item.published?"已發布":"未發布"}</small><div><button disabled={busy} type="button" onClick={()=>void togglePublish(item)}>{item.published?"取消發布":"發布"}</button> <button disabled={busy} type="button" onClick={()=>void remove(item)}>刪除</button></div></li>)}</ul>}
     <p role="status">{message}</p>
   </article>;
 }

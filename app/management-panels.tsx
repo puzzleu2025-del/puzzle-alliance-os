@@ -30,6 +30,7 @@ export type Activity = {
   progress?: number;
   budget?: number | string;
   feeAmount?: number;
+  publicListing?: boolean;
   type?: string;
   size?: string;
   targetAttendance?: number;
@@ -425,6 +426,7 @@ function ActivityFields({ activity, userName, members, disabled }: { activity?: 
     <label>活動主責<MemberSelect name="owner" members={members} defaultValue={activity?.owner || userName} required /></label>
     <label>職務代理<MemberSelect name="proxy" members={members} defaultValue={activity?.proxy} /></label>
     <label className="mgmt-span-2">場地<input name="location" maxLength={200} defaultValue={activity?.location} /></label>
+    <label className="mgmt-span-2"><input type="checkbox" name="publicListing" defaultChecked={activity?.publicListing === true} /> 公開於前台（對外顯示名稱、日期、場地與報名入口）</label>
     <label className="mgmt-span-2">工作組（逗號分隔）<input name="teams" defaultValue={activity?.teams?.join(", ")} placeholder="企劃, 場務, 公關" maxLength={500} /></label>
     <label className="mgmt-span-2">活動說明<textarea name="description" maxLength={5000} defaultValue={activity?.description} /></label>
   </fieldset>;
@@ -470,6 +472,7 @@ export function ActivitiesPanel({ data, userId, userName, userRole, memberOption
       endDate,
       proxy: field(form, "proxy"),
       location: field(form, "location"),
+      publicListing: form.get("publicListing") === "on",
       teams: commaList(field(form, "teams")),
       budget: field(form, "budget"),
       feeAmount: Number(field(form, "feeAmount")),

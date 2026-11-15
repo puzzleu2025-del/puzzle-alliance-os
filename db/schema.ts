@@ -93,6 +93,21 @@ export const registrationSubmissions = sqliteTable("registration_submissions", {
   uniqueIndex("registration_submissions_id_form_unique").on(table.id, table.formId),
 ]);
 
+// Public announcements (消息) shown on the public site. Only published rows are readable publicly.
+export const siteAnnouncements = sqliteTable("site_announcements", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  published: integer("published", { mode: "boolean" }).notNull().default(false),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  check("site_announcements_title_valid", sql`length(trim(${table.title})) BETWEEN 1 AND 120`),
+  check("site_announcements_body_valid", sql`length(trim(${table.body})) BETWEEN 1 AND 4000`),
+  index("site_announcements_published_idx").on(table.published, table.updatedAt),
+]);
+
 // Single-row setting, changeable only by a system administrator.
 export const dataRetentionSettings = sqliteTable("data_retention_settings", {
   id: integer("id").primaryKey(),

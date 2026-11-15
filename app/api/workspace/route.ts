@@ -437,7 +437,7 @@ function validState(value: unknown): value is {activities:unknown[];tasks:unknow
   const stringList = (item: Record<string,unknown>, key: string) => item[key] === undefined || (Array.isArray(item[key]) && item[key].every(x => typeof x === "string"));
   return row.activities.every(x => strings(x,["id","name","date","owner","status","description"])
       && optionalStrings(x,["startDate","endDate","proxy","location","type","size","currentMilestone","traineeCoordinatorId","settingsSubmittedAt"])
-      && stringList(x,"teams") && stringList(x,"coordinatorIds") && (x.progress === undefined || typeof x.progress === "number")
+      && stringList(x,"teams") && stringList(x,"coordinatorIds") && (x.progress === undefined || typeof x.progress === "number") && (x.publicListing === undefined || typeof x.publicListing === "boolean")
       && (x.phasePlans === undefined || (object(x.phasePlans) && Object.entries(x.phasePlans).every(([phase, plan]) =>
         /^P[1-9]$/.test(phase) && object(plan) && optionalStrings(plan,["startDate","due","notes","owner","proxy"])
         && (plan.progress === undefined || (typeof plan.progress === "number" && Number.isFinite(plan.progress) && plan.progress >= 0 && plan.progress <= 100)))))

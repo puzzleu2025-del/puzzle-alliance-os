@@ -68,6 +68,7 @@ export type RegistrationSubmission = {
   status: RegistrationSubmissionStatus;
   paymentStatus?: RegistrationPaymentStatus;
   paymentNote?: string;
+  remittanceLast5?: string;
   feeFollowup?: boolean;
   feeRecheckReason?: "price_change" | "refund" | "";
   reminderFiveDaysSentAt?: string;
@@ -157,6 +158,14 @@ export function registrationAnswerStructure(fields: RegistrationField[]) {
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const phonePattern = /^\+?[0-9 ()-]{7,30}(?:\s*(?:#|x|ext\.?)[0-9]{1,8})?$/i;
+
+// Remittance last five digits: optional at signup and later, exact digits when present.
+export function normalizeRemittanceLast5(value: unknown): string | null {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" || /^[0-9]{5}$/.test(trimmed) ? trimmed : null;
+}
 
 export function normalizeRegistrationText(value: unknown, maxLength = MAX_TEXT) {
   return String(value ?? "")

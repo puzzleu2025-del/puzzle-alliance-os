@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { csrfError, currentToken, getMember, randomToken, tokenHash } from "@/app/admin-auth";
-import { normalizeRegistrationForm, normalizeRegistrationText, registrationPresentationError, registrationAnswerStructure, REGISTRATION_REQUEST_LIMIT, type RegistrationForm, type RegistrationPaymentStatus, type RegistrationSubmission } from "@/app/registration-types";
+import { normalizeRegistrationForm, normalizeRegistrationText, normalizeRemittanceLast5, registrationPresentationError, registrationAnswerStructure, REGISTRATION_REQUEST_LIMIT, type RegistrationForm, type RegistrationPaymentStatus, type RegistrationSubmission } from "@/app/registration-types";
 
 export const dynamic = "force-dynamic";
 const noStore = { "Cache-Control": "private, no-store" };
@@ -61,8 +61,8 @@ export async function GET(request: Request) {
   let submissions: RegistrationSubmission[] = [];
   const canSeeResponses = auth.user!.role !== "trainee_coordinator";
   if (ids.length && canSeeResponses) {
-    const rows = await env.DB!.prepare("SELECT id,form_id AS formId,answers_json AS answersJson,consent,payment_status AS paymentStatus,payment_note AS paymentNote,fee_followup AS feeFollowup,fee_recheck_reason AS feeRecheckReason,reminder_5d_sent_at AS reminderFiveDaysSentAt,reminder_1d_sent_at AS reminderOneDaySentAt,submitted_at AS submittedAt FROM registration_submissions WHERE form_id=? ORDER BY submitted_at DESC").bind(ids[0]).all<{id:string;formId:string;answersJson:string;consent:number;paymentStatus:RegistrationPaymentStatus;paymentNote:string;feeFollowup:number;feeRecheckReason:"price_change"|"refund"|"";reminderFiveDaysSentAt:string|null;reminderOneDaySentAt:string|null;submittedAt:string}>();
-    submissions = rows.results.flatMap((row) => { try { return [{ id: row.id, formId: row.formId, activityId, answers: JSON.parse(row.answersJson), consent: row.consent === 1, status: "submitted" as const, paymentStatus: row.paymentStatus, paymentNote: row.paymentNote || undefined, feeFollowup: row.feeFollowup === 1, feeRecheckReason: row.feeRecheckReason, reminderFiveDaysSentAt: row.reminderFiveDaysSentAt || undefined, reminderOneDaySentAt: row.reminderOneDaySentAt || undefined, submittedAt: row.submittedAt }]; } catch { return []; } });
+    const rows = await env.DB!.prepare("SELECT id,form_id AS formId,answers_json AS answersJson,consent,payment_status AS paymentStatus,payment_note AS paymentNote,remittance_last5 AS remittanceLast5,fee_followup AS feeFollowup,fee_recheck_reason AS feeRecheckReason,reminder_5d_sent_at AS reminderFiveDaysSentAt,reminder_1d_sent_at AS reminderOneDaySentAt,submitted_at AS submittedAt FROM registration_submissions WHERE form_id=? ORDER BY submitted_at DESC").bind(ids[0]).all<{id:string;formId:string;answersJson:string;consent:number;paymentStatus:RegistrationPaymentStatus;paymentNote:string;remittanceLast5:string;feeFollowup:number;feeRecheckReason:"price_change"|"refund"|"";reminderFiveDaysSentAt:string|null;reminderOneDaySentAt:string|null;submittedAt:string}>();
+    submissions = rows.results.flatMap((row) => { try { return [{ id: row.id, formId: row.formId, activityId, answers: JSON.parse(row.answersJson), consent: row.consent === 1, status: "submitted" as const, paymentStatus: row.paymentStatus, paymentNote: row.paymentNote || undefined, remittanceLast5: row.remittanceLast5 || undefined, feeFollowup: row.feeFollowup === 1, feeRecheckReason: row.feeRecheckReason, reminderFiveDaysSentAt: row.reminderFiveDaysSentAt || undefined, reminderOneDaySentAt: row.reminderOneDaySentAt || undefined, submittedAt: row.submittedAt }]; } catch { return []; } });
   }
   return Response.json({ forms, submissions, feeAmount: fee?.amount ?? 0, feeRevision: fee?.revision ?? 0, permission: canSeeResponses ? "admin" : "form_editor" }, { headers: noStore });
 }
@@ -127,10 +127,32 @@ export async function PUT(request: Request) {
 export async function PATCH(request: Request) {
   const csrf = csrfError(request); if (csrf) return csrf;
   const auth = await authorize(); if (auth.error) return auth.error;
-  let body: {formId?:unknown;submissionId?:unknown;paymentStatus?:unknown;paymentNote?:unknown;feeRevision?:unknown;resolveRecheck?:unknown};
+  let body: {action?:unknown;formId?:unknown;submissionId?:unknown;paymentStatus?:unknown;paymentNote?:unknown;feeRevision?:unknown;resolveRecheck?:unknown;remittanceLast5?:unknown};
   try { body = await request.json(); } catch { return Response.json({ error: "對帳資料格式錯誤" }, { status: 400, headers: noStore }); }
   const formId = String(body.formId ?? "").trim(), submissionId = String(body.submissionId ?? "").trim();
   const paymentStatus = String(body.paymentStatus ?? "") as RegistrationPaymentStatus;
+  if (body.action === "remittance") {
+    // Staff backfill of the remittance last five digits; reconciliation rules do not apply to this field.
+    const remittanceLast5 = normalizeRemittanceLast5(body.remittanceLast5);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(formId) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(submissionId) || remittanceLast5 === null) return Response.json({ error: "匯款末五碼須為 5 位數字" }, { status: 400, headers: noStore });
+    if (auth.user!.role === "trainee_coordinator") return Response.json({ error: "報名對帳僅限總召以上" }, { status: 403, headers: noStore });
+    const remittanceForm = await env.DB!.prepare("SELECT activity_id AS activityId FROM registration_forms WHERE id=?").bind(formId).first<{ activityId: string }>();
+    if (!remittanceForm) return Response.json({ error: "找不到報名表" }, { status: 404, headers: noStore });
+    const remittanceAccess = await activityAccess(remittanceForm.activityId, auth.user!);
+    const remittancePermissionError = writeAccess(remittanceAccess); if (remittancePermissionError) return remittancePermissionError;
+    const remittanceToken = await currentToken();
+    if (!/^[a-f0-9]{64}$/.test(remittanceToken)) return Response.json({ error: "登入已失效" }, { status: 401, headers: noStore });
+    const remittanceNonce = crypto.randomUUID(), remittanceNow = new Date().toISOString();
+    const remittanceResult = await env.DB!.batch([
+      env.DB!.prepare(`UPDATE registration_submissions SET remittance_last5=?,reconciliation_nonce=? WHERE id=? AND form_id=?
+        AND EXISTS (SELECT 1 FROM admin_sessions s JOIN members m ON m.user_id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND m.status='active' AND m.user_id=? AND m.role=?)`)
+        .bind(remittanceLast5, remittanceNonce, submissionId, formId, await tokenHash(remittanceToken), Date.now(), auth.user!.userId, auth.user!.role),
+      env.DB!.prepare("INSERT INTO audit_logs (actor_id,action,entity_type,entity_id,created_at) SELECT ?,?,'registration_submission',?,? WHERE EXISTS (SELECT 1 FROM registration_submissions WHERE id=? AND form_id=? AND reconciliation_nonce=?)")
+        .bind(auth.user!.userId, "update_registration_remittance", submissionId, remittanceNow, submissionId, formId, remittanceNonce),
+    ]);
+    if (remittanceResult[0].meta.changes !== 1) return Response.json({ error: "權限或登入狀態已變更，請重新載入" }, { status: 409, headers: noStore });
+    return Response.json({ ok: true, remittanceLast5 }, { headers: noStore });
+  }
   const allowed: RegistrationPaymentStatus[] = ["unpaid", "checking", "paid", "refunded", "not_required"];
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(formId) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(submissionId) || !allowed.includes(paymentStatus)) return Response.json({ error: "對帳資料無效" }, { status: 400, headers: noStore });
   const paymentNote = normalizeRegistrationText(body.paymentNote, 1_000);

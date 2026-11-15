@@ -1,0 +1,1 @@
+ALTER TABLE `registration_submissions` ADD `remittance_last5` text DEFAULT '' NOT NULL;

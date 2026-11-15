@@ -77,6 +77,7 @@ export const registrationSubmissions = sqliteTable("registration_submissions", {
   consent: integer("consent", { mode: "boolean" }).notNull(),
   paymentStatus: text("payment_status").notNull().default("unpaid"),
   paymentNote: text("payment_note").notNull().default(""),
+  remittanceLast5: text("remittance_last5").notNull().default(""),
   feeFollowup: integer("fee_followup", { mode: "boolean" }).notNull().default(false),
   feeRecheckReason: text("fee_recheck_reason").notNull().default(""),
   reconciliationNonce: text("reconciliation_nonce"),

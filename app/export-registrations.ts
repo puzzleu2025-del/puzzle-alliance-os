@@ -31,7 +31,7 @@ function columnName(index: number) {
 
 function worksheet(form: RegistrationForm, submissions: RegistrationSubmission[]) {
   const paymentLabels = { unpaid: "未對帳", checking: "待確認", paid: "已對帳", refunded: "已退款", not_required: "無需付款" } as const;
-  const headers = ["提交編號", "狀態", "提交時間", "同意隱私告知", "對帳狀態", "對帳註記", "活動前 5 天提醒", "活動前 1 天提醒", ...form.fields.map((field) => field.label)];
+  const headers = ["提交編號", "狀態", "提交時間", "同意隱私告知", "對帳狀態", "匯款末五碼", "對帳註記", "活動前 5 天提醒", "活動前 1 天提醒", ...form.fields.map((field) => field.label)];
   const rows = [
     headers,
     ...submissions.map((submission) => [
@@ -40,6 +40,7 @@ function worksheet(form: RegistrationForm, submissions: RegistrationSubmission[]
       submission.submittedAt,
       submission.consent ? "是" : "否",
       paymentLabels[submission.paymentStatus ?? "unpaid"],
+      submission.remittanceLast5 ?? "",
       submission.paymentNote ?? "",
       submission.reminderFiveDaysSentAt ?? "尚未寄送",
       submission.reminderOneDaySentAt ?? "尚未寄送",

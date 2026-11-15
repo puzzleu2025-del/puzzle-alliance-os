@@ -124,7 +124,7 @@ export async function participantRegistrationHttp(
     try { body = await readJson(request, operation === "registration" ? 60_000 : 4_096); }
     catch { return failure(400); }
     if (operation === "registration") {
-      if (!(exactObject(body, ["slug", "answers", "consent", "idempotencyKey", "formVersion"]) || exactObject(body, ["slug", "answers", "consent", "idempotencyKey", "formVersion", "feeRevision"])) ||
+      if (!(exactObject(body, ["slug", "answers", "consent", "idempotencyKey", "formVersion"]) || exactObject(body, ["slug", "answers", "consent", "idempotencyKey", "formVersion", "feeRevision"]) || exactObject(body, ["slug", "answers", "consent", "idempotencyKey", "formVersion", "feeRevision", "remittanceLast5"])) ||
           typeof body.slug !== "string" || body.slug.length !== 32 || !/^[a-f0-9]{32}$/.test(body.slug)) return failure(400);
     } else if (operation === "prefill") {
       if (!exactObject(body, ["slug"]) || typeof body.slug !== "string" ||
@@ -155,6 +155,7 @@ export async function participantRegistrationHttp(
       const outcome = await submitParticipantRegistration(db, kind, cookie, data.slug, {
         answers: data.answers, consent: data.consent, idempotencyKey: data.idempotencyKey, formVersion: data.formVersion,
         ...(Object.hasOwn(data, "feeRevision") ? { feeRevision: data.feeRevision } : {}),
+        ...(Object.hasOwn(data, "remittanceLast5") ? { remittanceLast5: data.remittanceLast5 } : {}),
       });
       if (!outcome.ok) {
         const status = { invalid: 400, unauthorized: 401, closed: 409, conflict: 409, unavailable: 503 }[outcome.code];

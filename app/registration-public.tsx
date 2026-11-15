@@ -92,6 +92,8 @@ export default function RegistrationPublic({ form, activityName, feeAmount, onSu
   const [complete, setComplete] = useState(false);
   const [consent, setConsent] = useState(false);
   const [consentError, setConsentError] = useState(false);
+  const [remittance, setRemittance] = useState("");
+  const [remittanceError, setRemittanceError] = useState("");
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -99,7 +101,9 @@ export default function RegistrationPublic({ form, activityName, feeAmount, onSu
     const validation = validateRegistrationSubmission(form, answers);
     setErrors(validation.fieldErrors);
     setConsentError(!consent);
-    if (!validation.ok || !consent) {
+    const remittanceValid = remittance === "" || /^[0-9]{5}$/.test(remittance);
+    setRemittanceError(remittanceValid ? "" : "匯款末五碼須為 5 位數字");
+    if (!validation.ok || !consent || !remittanceValid) {
       const first = form.fields.find((field) => validation.fieldErrors[field.id]);
       if (first) document.querySelector<HTMLElement>(`[name="${CSS.escape(first.id)}"]`)?.focus();
       else document.querySelector<HTMLElement>("#registration-privacy-consent")?.focus();
@@ -115,6 +119,7 @@ export default function RegistrationPublic({ form, activityName, feeAmount, onSu
         activityId: form.activityId,
         answers: validation.answers,
         consent: true,
+        remittanceLast5: remittance,
         status: "submitted",
         submittedAt: new Date().toISOString(),
       });
@@ -127,6 +132,7 @@ export default function RegistrationPublic({ form, activityName, feeAmount, onSu
       setAnswers(initialAnswers(form));
       setErrors({});
       setConsent(false);
+      setRemittance("");
       setConsentError(false);
     } else {
       setFailed(true);
@@ -138,5 +144,5 @@ export default function RegistrationPublic({ form, activityName, feeAmount, onSu
   }
 
   const unavailable = form.status !== "open";
-  return <main style={shellStyle}><section style={cardStyle}><header><p style={{ color: "#5b6ee1", fontWeight: 800, letterSpacing: ".08em", margin: 0 }}>{activityName}</p><h1 style={{ margin: "6px 0 8px" }}>{form.title}</h1>{feeAmount !== undefined && <p>報名費：{feeAmount === 0 ? "免費" : `新台幣 ${feeAmount.toLocaleString("zh-TW")} 元`}</p>}<RegistrationImage value={form.image} alt={`${form.title} 主題圖片`} />{form.description && <p style={{ color: "#596275", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{form.description}</p>}</header>{unavailable ? <p role="status" style={{ marginTop: 24, padding: 14, background: "#f5f7fb", borderRadius: 10 }}>{form.status === "closed" ? "此表單已停止收件。" : "此表單尚未開放。"}</p> : <form onSubmit={submit} noValidate><div style={gridStyle}>{form.fields.map((field) => <FieldControl key={field.id} field={field} value={answers[field.id]} error={errors[field.id]} disabled={busy} setValue={(value) => { setAnswers((current) => ({ ...current, [field.id]: value })); setErrors((current) => { const next = { ...current }; delete next[field.id]; return next; }); }} />)}</div><section style={{ marginTop: 22, padding: 14, background: "#f5f7fb", borderRadius: 10 }}><b>個人資料與隱私告知</b><p style={{ color: "#596275", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{form.privacyNotice || "你提供的資料只用於本次活動報名、聯絡與行政作業。"}</p><label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}><input id="registration-privacy-consent" type="checkbox" checked={consent} disabled={busy} aria-invalid={consentError} aria-describedby={consentError ? "registration-consent-error" : undefined} onChange={(event) => { setConsent(event.target.checked); setConsentError(false); }} />我已閱讀並同意上述告知</label>{consentError && <span id="registration-consent-error" role="alert" style={errorStyle}>必須同意隱私告知才能送出</span>}</section>{failed && <p role="alert" style={{ marginTop: 18, color: "#a32f2f" }}>送出失敗，填寫內容已保留，請稍後再試。</p>}<button type="submit" disabled={busy} style={{ width: "100%", minHeight: 48, marginTop: 24, border: 0, borderRadius: 11, background: "#5b6ee1", color: "#fff", font: "inherit", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "送出中…" : form.submitLabel || "送出報名"}</button></form>}</section></main>;
+  return <main style={shellStyle}><section style={cardStyle}><header><p style={{ color: "#5b6ee1", fontWeight: 800, letterSpacing: ".08em", margin: 0 }}>{activityName}</p><h1 style={{ margin: "6px 0 8px" }}>{form.title}</h1>{feeAmount !== undefined && <p>報名費：{feeAmount === 0 ? "免費" : `新台幣 ${feeAmount.toLocaleString("zh-TW")} 元`}</p>}<RegistrationImage value={form.image} alt={`${form.title} 主題圖片`} />{form.description && <p style={{ color: "#596275", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{form.description}</p>}</header>{unavailable ? <p role="status" style={{ marginTop: 24, padding: 14, background: "#f5f7fb", borderRadius: 10 }}>{form.status === "closed" ? "此表單已停止收件。" : "此表單尚未開放。"}</p> : <form onSubmit={submit} noValidate><div style={gridStyle}>{form.fields.map((field) => <FieldControl key={field.id} field={field} value={answers[field.id]} error={errors[field.id]} disabled={busy} setValue={(value) => { setAnswers((current) => ({ ...current, [field.id]: value })); setErrors((current) => { const next = { ...current }; delete next[field.id]; return next; }); }} />)}</div>{feeAmount !== undefined && feeAmount > 0 && <section style={{ marginTop: 22 }}><label style={{ display: "grid", gap: 6 }}><span><b>匯款末五碼（選填）</b></span><input id="registration-remittance" name="remittanceLast5" inputMode="numeric" autoComplete="off" maxLength={5} value={remittance} disabled={busy} onChange={(event) => { setRemittance(event.target.value.replace(/D/g, "").slice(0, 5)); setRemittanceError(""); }} style={{ maxWidth: 180, padding: 8 }} /><small style={{ color: "#596275" }}>可先不填，之後可請工作人員協助補填。</small></label>{remittanceError && <p role="alert" style={{ color: "#b42318" }}>{remittanceError}</p>}</section>}<section style={{ marginTop: 22, padding: 14, background: "#f5f7fb", borderRadius: 10 }}><b>個人資料與隱私告知</b><p style={{ color: "#596275", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{form.privacyNotice || "你提供的資料只用於本次活動報名、聯絡與行政作業。"}</p><label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}><input id="registration-privacy-consent" type="checkbox" checked={consent} disabled={busy} aria-invalid={consentError} aria-describedby={consentError ? "registration-consent-error" : undefined} onChange={(event) => { setConsent(event.target.checked); setConsentError(false); }} />我已閱讀並同意上述告知</label>{consentError && <span id="registration-consent-error" role="alert" style={errorStyle}>必須同意隱私告知才能送出</span>}</section>{failed && <p role="alert" style={{ marginTop: 18, color: "#a32f2f" }}>送出失敗，填寫內容已保留，請稍後再試。</p>}<button type="submit" disabled={busy} style={{ width: "100%", minHeight: 48, marginTop: 24, border: 0, borderRadius: 11, background: "#5b6ee1", color: "#fff", font: "inherit", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy ? "送出中…" : form.submitLabel || "送出報名"}</button></form>}</section></main>;
 }

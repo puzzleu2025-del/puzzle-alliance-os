@@ -45,7 +45,8 @@ test('watch stays silent while nothing changes and closes on abort', async () =>
   const controller = new AbortController();
   let reads = 0;
   const stream = watchWorkspace(async () => { reads++; return { role: 'admin', version: 7 }; }, { baseline: { role: 'admin', version: 7 }, intervalMs: 5, signal: controller.signal });
-  await new Promise(resolve => setTimeout(resolve, 40));
+  // Wait for at least two polls rather than a fixed delay, so a loaded machine cannot make this flaky.
+  for (let waited = 0; reads < 2 && waited < 2000; waited += 5) await new Promise(resolve => setTimeout(resolve, 5));
   controller.abort();
   const text = await readAll(stream);
   assert.equal(text, '');

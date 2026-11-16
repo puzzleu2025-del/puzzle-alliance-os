@@ -188,3 +188,19 @@ test('the public reader merges stored JSON onto defaults and ignores bad fields'
     assert.deepEqual(buildSiteContent(null).content, DEFAULT_SITE_CONTENT);
   } finally { sqlite.close(); }
 });
+
+test('the seeded system administrator can edit and read the front-site content for management', async () => {
+  const sqlite = setup();
+  try {
+    const adminToken = 'e'.repeat(64);
+    sqlite.exec(`INSERT INTO admin_sessions(token_hash,user_id,expires_at) VALUES ('${hashOf(adminToken)}','admin-kao19950411',4102444800000)`);
+    as({ userId: 'admin-kao19950411', role: 'admin', displayName: 'Admin' }, adminToken);
+    const edited = clone(DEFAULT_SITE_CONTENT);
+    edited.tagline = '管理員修改';
+    assert.equal((await put(edited)).status, 200);
+    assert.equal(sqlite.prepare('SELECT updated_by AS by FROM site_content WHERE id=1').get().by, 'admin-kao19950411');
+    const managed = await get('?scope=manage');
+    assert.equal(managed.status, 200);
+    assert.equal((await managed.json()).content.tagline, '管理員修改');
+  } finally { sqlite.close(); }
+});

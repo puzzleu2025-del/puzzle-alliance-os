@@ -11,6 +11,7 @@ const actions: Record<string,string> = {create_activity:"建立活動",create_ta
 export default function SettingsPanel({preview,version,sync,audit,refresh,onLogout}:{preview:boolean;version:number;sync:string;audit:Audit[];refresh:()=>void;onLogout?:()=>void}) {
   const [matrix,setMatrix]=useState(false);
   return <><div className="page-heading"><div><h2>系統設定</h2><p className="muted">帳號安全、同步機制、角色權限與稽核紀錄</p></div></div><div className="settings-grid">
+    <article className="card" style={{gridColumn:"1 / -1"}} aria-labelledby="site-admin-title"><h3 id="site-admin-title">前台網站管理（系統管理員、總召以上）</h3><p>對外前台的內容在這裡設定，儲存後前台即時更新。</p><ul className="audit-list"><li><b>前台文字</b>：首頁標題、快速入口、會員福利、常見問題、底部區塊與頁尾，見下方「前台內容」。</li><li><b>前台消息</b>：新增、發布、取消發布或刪除消息，見下方「前台消息」。</li><li><b>公開活動</b>：到「活動管理」編輯活動，勾選「公開於前台」後，該活動才會出現在首頁與行事曆。</li></ul>{!preview&&<a href="/" target="_blank" rel="noreferrer">開啟前台查看結果</a>}</article>
     <AccountCard preview={preview} onLogout={onLogout}/>
     <RetentionCard preview={preview}/>
     <AnnouncementsCard preview={preview}/><SiteContentCard preview={preview}/>
@@ -210,7 +211,7 @@ function AnnouncementsCard({preview}:{preview:boolean}) {
       <input id="announcement-title" value={title} maxLength={120} onChange={(event)=>setTitle(event.target.value)} required/>
       <label htmlFor="announcement-body">內容</label>
       <textarea id="announcement-body" value={body} maxLength={4000} rows={4} onChange={(event)=>setBody(event.target.value)} required/>
-      <label><input type="checkbox" checked={publish} onChange={(event)=>setPublish(event.target.checked)}/> 立即發布到前台</label>
+      <label style={{display:"flex",alignItems:"center",gap:8}}><input type="checkbox" checked={publish} onChange={(event)=>setPublish(event.target.checked)} style={{width:18,height:18,minHeight:18,margin:0}}/><span>立即發布到前台</span></label>
       <button disabled={busy} type="submit">新增消息</button>
     </form>
     {items.length===0?<p className="muted">尚無消息。</p>:<ul className="audit-list">{items.map(item=><li key={item.id}><b>{item.title}</b> <small>{item.published?"已發布":"未發布"}</small><div><button disabled={busy} type="button" onClick={()=>void togglePublish(item)}>{item.published?"取消發布":"發布"}</button> <button disabled={busy} type="button" onClick={()=>void remove(item)}>刪除</button></div></li>)}</ul>}
